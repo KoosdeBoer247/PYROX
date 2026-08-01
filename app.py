@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 PYROX — heat-risk web app
 =========================
@@ -466,7 +465,12 @@ def run_pyrox(excel_blob: bytes, group_names: tuple, forecast_days_used: int,
 
 
 def pyrox_chart(pyrox_result: dict) -> go.Figure:
-    dates = pyrox_result["dates"]
+    # Convert to pandas Timestamps: plotly's add_vline/add_hline annotation
+    # helper computes a numeric mean of the shape's endpoints, which raises
+    # TypeError on datetime.date objects ("unsupported operand type(s) for +:
+    # 'int' and 'datetime.date'"). Timestamps plus an explicit
+    # add_shape/add_annotation pair avoids that code path entirely.
+    dates = [pd.Timestamp(d) for d in pyrox_result["dates"]]
     fig = go.Figure()
     for name, res in pyrox_result["groups"].items():
         pct = 100 * res["cumulative_strain"][1:] / res["critical_strain"]
@@ -483,8 +487,17 @@ def pyrox_chart(pyrox_result: dict) -> go.Figure:
 
     fstart = pyrox_result["forecast_start_idx"]
     if 0 < fstart < len(dates):
-        fig.add_vline(x=dates[fstart], line_dash="dash", line_color="gray",
-                      annotation_text="forecast start", annotation_position="top")
+        x_marker = dates[fstart]
+        fig.add_shape(
+            type="line", x0=x_marker, x1=x_marker, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(color="gray", dash="dash"),
+        )
+        fig.add_annotation(
+            x=x_marker, y=1, xref="x", yref="paper",
+            text="forecast start", showarrow=False,
+            yanchor="bottom", font=dict(color="gray", size=11),
+        )
 
     fig.update_layout(
         title="PYROX \u2014 cumulative strain per group (% of critical threshold)",
