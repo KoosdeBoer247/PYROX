@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 Decision-support layer for the PYROX/Thermopoulos app
 ======================================================
@@ -331,15 +330,18 @@ def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: floa
     has_divergence = "utci_diverges" in schedule.columns and schedule["utci_diverges"].any()
 
     st.markdown(
-        f"**\u23f0 Which hours are safe for {group_label}** "
-        f"(at {met:.1f} MET, WBGT-based occupational screening)"
+        f"**\u23f0 Which hours carry elevated heat exposure for {group_label}** "
+        f"(at {met:.1f} MET, WBGT-based screening)"
     )
     st.caption(
-        "This uses the standard ISO 7243 / ACGIH occupational WBGT action "
-        "limits, applied hour by hour — a same-shift screening layer, "
-        "shown alongside (not instead of) PYROX's cumulative-strain view "
-        "above. WBGT has known limitations as a sole metric (validated on "
-        "a narrow population, no multi-day load, coarse workload bands) — "
+        "This uses the standard ISO 7243 / ACGIH WBGT action limits, "
+        "applied hour by hour — a same-day screening layer, shown "
+        "alongside (not instead of) PYROX's cumulative-strain view above. "
+        "For groups with a physical workload, treat the labels below as "
+        "work/rest guidance; for others, as guidance on how much of the "
+        "hour is safe to spend active and exposed versus resting/sheltered. "
+        "WBGT has known limitations as a sole metric (validated on a "
+        "narrow population, no multi-day load, coarse workload bands) — "
         "treat this as a quick screening check, not a precise prediction. "
         "Hours outlined in black are cross-checked against UTCI: WBGT "
         "weights radiant/solar load at only 20% (vs. 70% for humidity), so "
@@ -391,4 +393,5 @@ def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: floa
     # Per-day plain-language summary
     for day in sorted(schedule["time"].dt.date.unique()):
         st.markdown(f"**{pd.Timestamp(day).strftime('%A %d %b')}:** " + summarize_day(schedule, day))
+
 
