@@ -1164,4 +1164,3 @@ if st.session_state.results:
     )
 else:
     st.info("Enter a city on the left and click **Run analysis** to get started.")
-ed.")
