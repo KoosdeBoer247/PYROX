@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """
 PYROX — heat-risk web app
 =========================
@@ -680,6 +679,18 @@ with st.sidebar:
         custom_end = st.date_input("End date", value=default_end, max_value=date.today())
 
     st.divider()
+    view_mode = st.radio(
+        "View",
+        options=["Simple (for decision-makers)", "Technical (full detail)"],
+        index=0,
+        help="Simple hides model-internal detail (dimensionless risk "
+             "scores, calibration derivation, raw tables) and keeps the "
+             "activity/rest guide and plain verdicts front and center. "
+             "Technical shows everything, for research use.",
+    )
+    is_simple = view_mode.startswith("Simple")
+
+    st.divider()
     run_button = st.button("\U0001F680 Run analysis", type="primary", use_container_width=True)
 
 # =============================================================================
@@ -861,30 +872,64 @@ if st.session_state.results:
     # NOT the HESTIA CVR Monte Carlo, so no multi-minute wait here)
     # -------------------------------------------------------------------
     st.header("\U0001F9EC PYROX \u2014 population heat-strain risk")
-    st.caption(
-        "Per-group risk over the hindcast+forecast period, based on daily "
-        "heat load (paper Sec 2.2) plus metabolic load. Deterministic model, "
-        "no Monte Carlo \u2014 runs in milliseconds."
-    )
-    st.warning(
-        "\u26a0\ufe0f **Revised calibration in use \u2014 not the published "
-        "parameterisation.** Acclimatization capacities and recovery "
-        "thresholds have been re-derived (for 11 of 23 groups; the other 12 "
-        "are untouched), and a metabolic (MET) term added, to correct three "
-        "defects in the original roster: resilience counted twice "
-        "(thresholds evaluated after the acclimatization reduction), "
-        "thresholds set on a scale that real weather never reaches, and one "
-        "group assigned a capacity of 1.00 (i.e. immunity to any heat). "
-        "**PYROX's population tier has no dedicated event-level validation "
-        "against real incident data in this suite, before or after this "
-        "revision** \u2014 the r=0.866 correlation, Falmouth hindcasts, and "
-        "IRONMAN Hoorn results belong to HESTIA's individual tier, not "
-        "PYROX, and do not apply here either way. Full derivation, the "
-        "minimal-intervention rationale, and this correction: "
-        "`pyrox_revised_calibration.py`."
-    )
 
-    render_key_concepts_explainer(st)
+    if is_simple:
+        st.caption(
+            "Per-group risk over the coming days, for the population "
+            "groups you choose below."
+        )
+        st.warning(
+            "\u26a0\ufe0f **This is a screening tool, not a validated medical "
+            "prediction.** It has not yet been checked against real "
+            "hospital or incident records for these population groups. "
+            "Use it to compare groups and time windows, not as a precise "
+            "probability of harm."
+        )
+        with st.expander("Full technical calibration notes"):
+            st.markdown(
+                "**Revised calibration in use \u2014 not the published "
+                "parameterisation.** Acclimatization capacities and recovery "
+                "thresholds have been re-derived (for 11 of 23 groups; the "
+                "other 12 are untouched), and a metabolic (MET) term added, "
+                "to correct three defects in the original roster: resilience "
+                "counted twice (thresholds evaluated after the "
+                "acclimatization reduction), thresholds set on a scale that "
+                "real weather never reaches, and one group assigned a "
+                "capacity of 1.00 (i.e. immunity to any heat). PYROX's "
+                "population tier has no dedicated event-level validation "
+                "against real incident data in this suite, before or after "
+                "this revision \u2014 the r=0.866 correlation, Falmouth "
+                "hindcasts, and IRONMAN Hoorn results belong to HESTIA's "
+                "individual tier, not PYROX, and do not apply here either "
+                "way. Full derivation, the minimal-intervention rationale, "
+                "and this correction: `pyrox_revised_calibration.py`."
+            )
+    else:
+        st.caption(
+            "Per-group risk over the hindcast+forecast period, based on daily "
+            "heat load (paper Sec 2.2) plus metabolic load. Deterministic model, "
+            "no Monte Carlo \u2014 runs in milliseconds."
+        )
+        st.warning(
+            "\u26a0\ufe0f **Revised calibration in use \u2014 not the published "
+            "parameterisation.** Acclimatization capacities and recovery "
+            "thresholds have been re-derived (for 11 of 23 groups; the other 12 "
+            "are untouched), and a metabolic (MET) term added, to correct three "
+            "defects in the original roster: resilience counted twice "
+            "(thresholds evaluated after the acclimatization reduction), "
+            "thresholds set on a scale that real weather never reaches, and one "
+            "group assigned a capacity of 1.00 (i.e. immunity to any heat). "
+            "**PYROX's population tier has no dedicated event-level validation "
+            "against real incident data in this suite, before or after this "
+            "revision** \u2014 the r=0.866 correlation, Falmouth hindcasts, and "
+            "IRONMAN Hoorn results belong to HESTIA's individual tier, not "
+            "PYROX, and do not apply here either way. Full derivation, the "
+            "minimal-intervention rationale, and this correction: "
+            "`pyrox_revised_calibration.py`."
+        )
+
+    if not is_simple:
+        render_key_concepts_explainer(st)
 
     all_group_names = sorted(TARGET_GROUPS, key=lambda k: TARGET_GROUPS[k].display_name)
     default_selection = [g for g in PAPER_PROTOTYPES if g in TARGET_GROUPS]
@@ -1042,74 +1087,82 @@ if st.session_state.results:
             tuple(sorted(met_by_group.items())),
         )
 
-        st.caption(
-            f"Heat load is computed against the absolute reference of "
-            f"{HEAT_LOAD_REFERENCE_TEMP:.0f}\u00b0C apparent temperature, plus "
-            f"each group's metabolic contribution at {K_PER_MET:.2f}\u00b0C per MET "
-            f"above {MET_REFERENCE:.1f}. Physiological limits are absolute, so "
-            "local climatology is reported as context below rather than "
-            "folded into the load \u2014 see the README for why."
-        )
-
-        st.markdown("**Continuous risk level** \u2014 use this to rank days and groups.")
-        st.plotly_chart(final_risk_chart(pyrox_result), use_container_width=True)
-        st.caption(
-            "final_risk varies smoothly with load and is the appropriate "
-            "signal for graded operational decisions. Cumulative strain "
-            "below answers a different question: whether the regulatory loop "
-            "has opened and decompensation is running away. Strain is "
-            "bistable by design, so it tends to sit near baseline or near "
-            "the ceiling."
-        )
-
-        st.markdown("**Cumulative strain** \u2014 decompensation state.")
-        st.plotly_chart(pyrox_chart(pyrox_result), use_container_width=True)
-        st.dataframe(pyrox_summary_table(pyrox_result), use_container_width=True)
-        st.caption(
-            "'Peak risk (raw)' is dimensionless and only meaningful relative "
-            "to itself \u2014 the two columns beside it translate it: 'vs. mild "
-            "summer' is how many times this SAME group's own peak risk during "
-            "an unremarkable summer week; 'vs. Paris 2003' is this peak as a "
-            "% of what this same group showed during the August 2003 heatwave "
-            "(the suite's own severity benchmark). Both are comparisons to "
-            "known reference scenarios, not calibrated probabilities \u2014 "
-            "PYROX's population tier has no event-level validation (see the "
-            "warning above). "
-            "Caution/danger/emergency = the day cumulative strain first "
-            "reaches 50% / 75% / 90% of that group's critical threshold. "
-            "'\u2014' means the threshold was not reached within this period. "
-            "'Onset' is the apparent temperature at which the group begins "
-            "accumulating strain, which the revised calibration solves each "
-            "recovery threshold to produce."
-        )
-
-        # ---------------------------------------------------------------
-        # Hour-by-hour work/rest safety guide (WBGT-based, ISO 7243
-        # lineage). Answers "which hours are safe / dangerous", which the
-        # daily-resolution PYROX model above cannot. Shown only for groups
-        # with a meaningful metabolic load, since "which hours are safe to
-        # work" isn't a well-posed question at resting metabolic rate.
-        # ---------------------------------------------------------------
-        exertional_groups = [
-            g for g in selected_groups
-            if met_by_group.get(g, default_met(g)) > 1.8
-        ]
-        if exertional_groups:
-            st.subheader("\u23f0 Hour-by-hour work/rest safety guide")
+        if is_simple:
+            st.markdown("**Cumulative strain** \u2014 how close each group is to the danger point.")
+            st.plotly_chart(pyrox_chart(pyrox_result), use_container_width=True)
+            simple_table = pyrox_summary_table(pyrox_result).drop(columns=["Peak risk (raw)"])
+            st.dataframe(simple_table, use_container_width=True)
             st.caption(
-                "For groups with meaningful physical workload — answers "
-                "'which hours are safe, which are dangerous, and what "
-                "should change about the work plan'. This is a same-shift "
-                "WBGT screening layer (ISO 7243 / ACGIH action limits), "
-                "shown alongside — not instead of — the cumulative-strain "
-                "view above, which is the one that captures multi-day "
-                "load. Based on the forecast period only."
+                "'vs. mild summer' / 'vs. Paris 2003' compare this group's peak "
+                "load to two known reference weeks \u2014 not a calibrated "
+                "probability. Caution/Danger/Emergency = the day cumulative "
+                "strain first crosses 50% / 75% / 90% of this group's critical "
+                "threshold; '\u2014' means it wasn't reached in this period."
             )
-            for g in exertional_groups:
-                render_hourly_safety_panel(
-                    st, forecast_df, TARGET_GROUPS[g].display_name,
-                    met_by_group.get(g, default_met(g)),
-                )
+        else:
+            st.caption(
+                f"Heat load is computed against the absolute reference of "
+                f"{HEAT_LOAD_REFERENCE_TEMP:.0f}\u00b0C apparent temperature, plus "
+                f"each group's metabolic contribution at {K_PER_MET:.2f}\u00b0C per MET "
+                f"above {MET_REFERENCE:.1f}. Physiological limits are absolute, so "
+                "local climatology is reported as context below rather than "
+                "folded into the load \u2014 see the README for why."
+            )
+
+            st.markdown("**Continuous risk level** \u2014 use this to rank days and groups.")
+            st.plotly_chart(final_risk_chart(pyrox_result), use_container_width=True)
+            st.caption(
+                "final_risk varies smoothly with load and is the appropriate "
+                "signal for graded operational decisions. Cumulative strain "
+                "below answers a different question: whether the regulatory loop "
+                "has opened and decompensation is running away. Strain is "
+                "bistable by design, so it tends to sit near baseline or near "
+                "the ceiling."
+            )
+
+            st.markdown("**Cumulative strain** \u2014 decompensation state.")
+            st.plotly_chart(pyrox_chart(pyrox_result), use_container_width=True)
+            st.dataframe(pyrox_summary_table(pyrox_result), use_container_width=True)
+            st.caption(
+                "'Peak risk (raw)' is dimensionless and only meaningful relative "
+                "to itself \u2014 the two columns beside it translate it: 'vs. mild "
+                "summer' is how many times this SAME group's own peak risk during "
+                "an unremarkable summer week; 'vs. Paris 2003' is this peak as a "
+                "% of what this same group showed during the August 2003 heatwave "
+                "(the suite's own severity benchmark). Both are comparisons to "
+                "known reference scenarios, not calibrated probabilities \u2014 "
+                "PYROX's population tier has no event-level validation (see the "
+                "warning above). "
+                "Caution/danger/emergency = the day cumulative strain first "
+                "reaches 50% / 75% / 90% of that group's critical threshold. "
+                "'\u2014' means the threshold was not reached within this period. "
+                "'Onset' is the apparent temperature at which the group begins "
+                "accumulating strain, which the revised calibration solves each "
+                "recovery threshold to produce."
+            )
+
+        # ---------------------------------------------------------------
+        # Activity/rest guide (WBGT-based, ISO 7243 lineage). Answers
+        # "which hours are safe / dangerous", which the daily-resolution
+        # PYROX model above cannot. Shown for every selected group -- at
+        # resting MET this still tells a vulnerable group's carer which
+        # hours carry elevated ambient heat-stress exposure, not only
+        # which hours are safe to exert physically.
+        # ---------------------------------------------------------------
+        st.subheader("\u23f0 Activity/rest guide")
+        st.caption(
+            "Answers 'which hours are safe, which are dangerous, and what "
+            "should change about activity or exposure'. This is a "
+            "same-shift WBGT screening layer (ISO 7243 / ACGIH action "
+            "limits), shown alongside — not instead of — the "
+            "cumulative-strain view above, which is the one that captures "
+            "multi-day load. Based on the forecast period only."
+        )
+        for g in selected_groups:
+            render_hourly_safety_panel(
+                st, forecast_df, TARGET_GROUPS[g].display_name,
+                met_by_group.get(g, default_met(g)),
+            )
 
         # ---------------------------------------------------------------
         # Climatological context (separate from, not folded into, the model)
