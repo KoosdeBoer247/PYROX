@@ -213,12 +213,32 @@ def classify_hour(wbgt: float, met: float) -> dict:
     return {"status": "emergency", **_STATUS_STYLE["emergency"]}
 
 
-def hourly_schedule(wbgt_series: pd.Series, met: float) -> pd.DataFrame:
+def hourly_schedule(wbgt_series: pd.Series, met: float, utci_series: pd.Series = None) -> pd.DataFrame:
     """Build an hour-by-hour safety classification from an hourly WBGT
-    series (index = timestamps, as produced by Thermopoulos_Data_Engine)."""
+    series (index = timestamps, as produced by Thermopoulos_Data_Engine).
+
+    If `utci_series` is supplied (same index), each hour is cross-checked
+    against UTCI. WBGT's own formula -- 0.7x wet-bulb (humidity) + 0.2x
+    globe (radiant) + 0.1x dry-bulb -- gives radiant/solar load only a 20%
+    weight. On a moderate-humidity day with a large radiant excess (full
+    sun, high MRT), WBGT can stay well under its action limit while UTCI --
+    which weights radiation more fully -- already shows strong heat stress.
+    That is not a bug in either calculation; it is WBGT's known,
+    documented insensitivity to radiant load relative to humidity, the
+    same limitation already raised with FNV Bouw. Flagging the divergence
+    here is what makes it visible instead of silently passing as 'safe'.
+    """
     rows = []
     for ts, wbgt in wbgt_series.items():
-        rows.append({"time": ts, "WBGT": wbgt, **classify_hour(wbgt, met)})
+        c = classify_hour(wbgt, met)
+        utci_val = utci_series.get(ts) if utci_series is not None else None
+        c["UTCI"] = utci_val
+        c["utci_diverges"] = bool(
+            utci_val is not None and not pd.isna(utci_val)
+            and c["status"] in ("safe", "caution_75")
+            and utci_val >= 32.0  # UTCI "strong heat stress" threshold
+        )
+        rows.append({"time": ts, "WBGT": wbgt, **c})
     return pd.DataFrame(rows)
 
 
@@ -252,7 +272,12 @@ def summarize_day(schedule: pd.DataFrame, day) -> str:
         wins = _consecutive_windows(day_df, statuses)
         if not wins:
             return None
-        parts = [f"{s.strftime('%H:%M')}\u2013{e.strftime('%H:%M')}" for s, e in wins]
+        parts = []
+        for s, e in wins:
+            if (e - s) >= pd.Timedelta(hours=23):
+                parts.append("all day")
+            else:
+                parts.append(f"{s.strftime('%H:%M')}\u2013{e.strftime('%H:%M')}")
         return f"{verb} {', '.join(parts)}"
 
     pieces = []
@@ -270,15 +295,30 @@ def summarize_day(schedule: pd.DataFrame, day) -> str:
     else:
         verdict = "Reschedule heavy or outdoor tasks out of the danger window(s), if possible."
 
-    return " \u00b7 ".join(pieces) + f". {verdict}"
+    summary = " \u00b7 ".join(pieces) + f". {verdict}"
+
+    if "utci_diverges" in day_df.columns and day_df["utci_diverges"].any():
+        n = int(day_df["utci_diverges"].sum())
+        diverging_hours = day_df.loc[day_df["utci_diverges"], "time"].dt.strftime("%H:%M").tolist()
+        summary += (
+            f" \u26a0\ufe0f **{n} of these hour(s) ({', '.join(diverging_hours)}) are "
+            "WBGT-'safe' but UTCI \u226532\u00b0C (strong heat stress)** \u2014 likely "
+            "high direct-sun/radiant load that WBGT's formula under-weights. "
+            "Treat as caution, especially for unshaded work."
+        )
+
+    return summary
 
 
 def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: float) -> None:
     """Render the full hour-by-hour safety guide for one group/MET.
 
-    `df` must be an hourly weather dataframe with a `WBGT` column and a
-    datetime index (forecast_df or hindcast_df from the Thermopoulos
-    engine — the same objects already used for `thermal_chart`).
+    `df` must be an hourly weather dataframe with WBGT and (ideally) UTCI
+    columns and a datetime index (forecast_df or hindcast_df from the
+    Thermopoulos engine — the same objects already used for
+    `thermal_chart`). When UTCI is present, hours where WBGT reads "safe"
+    but UTCI already shows strong heat stress are flagged — see
+    `hourly_schedule` for why that divergence happens and matters.
     """
     import plotly.graph_objects as go
 
@@ -286,7 +326,9 @@ def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: floa
         st.info("No WBGT data available for the hourly safety guide.")
         return
 
-    schedule = hourly_schedule(df["WBGT"], met)
+    utci_series = df["UTCI"] if "UTCI" in df.columns else None
+    schedule = hourly_schedule(df["WBGT"], met, utci_series)
+    has_divergence = "utci_diverges" in schedule.columns and schedule["utci_diverges"].any()
 
     st.markdown(
         f"**\u23f0 Which hours are safe for {group_label}** "
@@ -298,17 +340,34 @@ def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: floa
         "shown alongside (not instead of) PYROX's cumulative-strain view "
         "above. WBGT has known limitations as a sole metric (validated on "
         "a narrow population, no multi-day load, coarse workload bands) — "
-        "treat this as a quick screening check, not a precise prediction."
+        "treat this as a quick screening check, not a precise prediction. "
+        "Hours outlined in black are cross-checked against UTCI: WBGT "
+        "weights radiant/solar load at only 20% (vs. 70% for humidity), so "
+        "it can call an hour 'safe' during high direct-sun exposure that "
+        "UTCI already flags as strong heat stress — outlined hours are "
+        "where that happens."
     )
 
-    # Colour-coded hourly bar
+    # Colour-coded hourly bar. Diverging hours get a dark outline so the
+    # WBGT-only "safe" colour doesn't silently hide the UTCI disagreement.
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=schedule["time"], y=[1] * len(schedule),
-        marker_color=schedule["colour"],
+        marker=dict(
+            color=schedule["colour"],
+            line=dict(
+                color=["#111827" if d else "rgba(0,0,0,0)" for d in schedule.get("utci_diverges", [False] * len(schedule))],
+                width=[2.5 if d else 0 for d in schedule.get("utci_diverges", [False] * len(schedule))],
+            ),
+        ),
         hovertext=[
             f"{t.strftime('%a %d %b, %H:%M')}<br>WBGT {w:.1f}\u00b0C<br>{lbl}"
-            for t, w, lbl in zip(schedule["time"], schedule["WBGT"], schedule["label"])
+            + (f"<br>UTCI {u:.1f}\u00b0C \u2014 \u26a0\ufe0f strong heat stress not reflected in WBGT" if d else "")
+            for t, w, lbl, d, u in zip(
+                schedule["time"], schedule["WBGT"], schedule["label"],
+                schedule.get("utci_diverges", [False] * len(schedule)),
+                schedule.get("UTCI", [None] * len(schedule)),
+            )
         ],
         hoverinfo="text",
         showlegend=False,
@@ -325,8 +384,11 @@ def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: floa
         "<span style='color:{colour}'>\u25cf</span> {label}".format(**v)
         for k, v in _STATUS_STYLE.items() if k != "unknown"
     )
+    if has_divergence:
+        legend_html += "  \u25a1 outlined = WBGT/UTCI disagree (see caption)"
     st.markdown(legend_html, unsafe_allow_html=True)
 
     # Per-day plain-language summary
     for day in sorted(schedule["time"].dt.date.unique()):
         st.markdown(f"**{pd.Timestamp(day).strftime('%A %d %b')}:** " + summarize_day(schedule, day))
+
