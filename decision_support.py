@@ -380,7 +380,7 @@ def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: floa
         margin=dict(l=10, r=10, t=10, b=30),
         bargap=0,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=f"hourly_safety_{group_label}")
 
     legend_html = "  ".join(
         "<span style='color:{colour}'>\u25cf</span> {label}".format(**v)
