@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 PYROX — heat-risk web app
 =========================
@@ -37,6 +38,7 @@ from thermopoulos_loader import (
 )
 from pyrox_model import PyroxModel
 from pyrox_groups import TARGET_GROUPS as _ORIGINAL_GROUPS, PAPER_PROTOTYPES
+from decision_support import render_key_concepts_explainer, render_hourly_safety_panel, relative_risk_text
 from pyrox_revised_calibration import (
     apply_revised_calibration,
     default_met,
@@ -632,11 +634,15 @@ def pyrox_summary_table(pyrox_result: dict) -> pd.DataFrame:
 
         onset = onset_temperature(name)
         met = pyrox_result.get("group_mets", {}).get(name, MET_REFERENCE)
+        peak_risk = float(max(res["final_risk"]))
+        mild_mult, paris_pct = relative_risk_text(peak_risk, name, met)
         rows.append({
             "Group": TARGET_GROUPS[name].display_name,
             "MET": round(met, 1),
             "Onset (\u00b0C)": onset if onset is not None else "\u2014",
-            "Peak risk": round(float(max(res["final_risk"])), 2),
+            "Peak risk (raw)": round(peak_risk, 2),
+            "vs. mild summer": f"{mild_mult:.1f}\u00d7" if mild_mult else "\u2014",
+            "vs. Paris 2003": f"{paris_pct:.0f}%" if paris_pct else "\u2014",
             "Peak strain (%)": round(100 * res["peak_strain"] / res["critical_strain"], 1),
             "Caution day (50%)": _date_or_dash(res["caution_day"]),
             "Danger day (75%)": _date_or_dash(res["danger_day"]),
@@ -878,6 +884,8 @@ if st.session_state.results:
         "`pyrox_revised_calibration.py`."
     )
 
+    render_key_concepts_explainer(st)
+
     all_group_names = sorted(TARGET_GROUPS, key=lambda k: TARGET_GROUPS[k].display_name)
     default_selection = [g for g in PAPER_PROTOTYPES if g in TARGET_GROUPS]
 
@@ -1058,6 +1066,15 @@ if st.session_state.results:
         st.plotly_chart(pyrox_chart(pyrox_result), use_container_width=True)
         st.dataframe(pyrox_summary_table(pyrox_result), use_container_width=True)
         st.caption(
+            "'Peak risk (raw)' is dimensionless and only meaningful relative "
+            "to itself \u2014 the two columns beside it translate it: 'vs. mild "
+            "summer' is how many times this SAME group's own peak risk during "
+            "an unremarkable summer week; 'vs. Paris 2003' is this peak as a "
+            "% of what this same group showed during the August 2003 heatwave "
+            "(the suite's own severity benchmark). Both are comparisons to "
+            "known reference scenarios, not calibrated probabilities \u2014 "
+            "PYROX's population tier has no event-level validation (see the "
+            "warning above). "
             "Caution/danger/emergency = the day cumulative strain first "
             "reaches 50% / 75% / 90% of that group's critical threshold. "
             "'\u2014' means the threshold was not reached within this period. "
@@ -1065,6 +1082,34 @@ if st.session_state.results:
             "accumulating strain, which the revised calibration solves each "
             "recovery threshold to produce."
         )
+
+        # ---------------------------------------------------------------
+        # Hour-by-hour work/rest safety guide (WBGT-based, ISO 7243
+        # lineage). Answers "which hours are safe / dangerous", which the
+        # daily-resolution PYROX model above cannot. Shown only for groups
+        # with a meaningful metabolic load, since "which hours are safe to
+        # work" isn't a well-posed question at resting metabolic rate.
+        # ---------------------------------------------------------------
+        exertional_groups = [
+            g for g in selected_groups
+            if met_by_group.get(g, default_met(g)) > 1.8
+        ]
+        if exertional_groups:
+            st.subheader("\u23f0 Hour-by-hour work/rest safety guide")
+            st.caption(
+                "For groups with meaningful physical workload — answers "
+                "'which hours are safe, which are dangerous, and what "
+                "should change about the work plan'. This is a same-shift "
+                "WBGT screening layer (ISO 7243 / ACGIH action limits), "
+                "shown alongside — not instead of — the cumulative-strain "
+                "view above, which is the one that captures multi-day "
+                "load. Based on the forecast period only."
+            )
+            for g in exertional_groups:
+                render_hourly_safety_panel(
+                    st, forecast_df, TARGET_GROUPS[g].display_name,
+                    met_by_group.get(g, default_met(g)),
+                )
 
         # ---------------------------------------------------------------
         # Climatological context (separate from, not folded into, the model)
@@ -1119,3 +1164,4 @@ if st.session_state.results:
     )
 else:
     st.info("Enter a city on the left and click **Run analysis** to get started.")
+ed.")
