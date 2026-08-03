@@ -36,7 +36,24 @@ from thermopoulos_loader import (
     HEAT_LOAD_PER_DEGREE,
 )
 from pyrox_model import PyroxModel
-from pyrox_groups import TARGET_GROUPS, PAPER_PROTOTYPES
+from pyrox_groups import TARGET_GROUPS as _ORIGINAL_GROUPS, PAPER_PROTOTYPES
+from pyrox_revised_calibration import (
+    apply_revised_calibration,
+    default_met,
+    met_adjusted_apparent_temperature,
+    onset_temperature,
+    K_PER_MET,
+    MET_REFERENCE,
+)
+
+# The revised population-tier calibration is applied unconditionally. See
+# pyrox_revised_calibration.py for the derivation and the three defects it
+# corrects. Note: PYROX's population tier has no dedicated event-level
+# validation in this suite (the r=0.866/Falmouth/Hoorn results belong to
+# HESTIA's individual tier, not PYROX -- see that module's docstring for the
+# correction of an earlier documentation error). The original roster stays
+# importable as _ORIGINAL_GROUPS for side-by-side inspection.
+TARGET_GROUPS = apply_revised_calibration(_ORIGINAL_GROUPS)
 
 # pythermalcomfort's UTCI implementation (ISO/CIE-based) is only validated for
 # air temperatures within this range; inputs outside it are silently set to
@@ -201,10 +218,11 @@ def thermal_chart(df: pd.DataFrame, title: str) -> go.Figure:
     fig.add_trace(go.Scatter(x=df.index, y=df["UTCI"], name="UTCI", line=dict(color="#7c3aed")))
     fig.add_trace(go.Scatter(x=df.index, y=df["MRT"], name="MRT", line=dict(color="#0ea5e9", dash="dot")))
     fig.update_layout(
-        title=title,
-        height=420,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        title=dict(text=title, x=0, xanchor="left", y=0.97, yanchor="top"),
+        height=440,
+        margin=dict(l=10, r=20, t=90, b=10),
+        legend=dict(orientation="h", yanchor="top", y=1.06, xanchor="left", x=0,
+                    font=dict(size=11)),
         hovermode="x unified",
     )
     fig.update_yaxes(title_text="\u00b0C")
@@ -395,7 +413,8 @@ def climatological_anomaly(combined: pd.DataFrame, climatology_baseline: float) 
 @st.cache_data(ttl=1800, show_spinner=False)
 def run_pyrox(excel_blob: bytes, group_names: tuple, forecast_days_used: int,
               hindcast_days_used: int, use_nocturnal_recovery: bool,
-              climatology_baseline: float = None):
+              climatology_baseline: float = None,
+              met_by_group: tuple = None):
     """Run PYROX (population tier) on the combined hindcast+forecast window.
 
     Unlike HESTIA's CVR Monte Carlo, PYROX is a deterministic day-by-day
@@ -424,6 +443,13 @@ def run_pyrox(excel_blob: bytes, group_names: tuple, forecast_days_used: int,
     limits already apply in PYROX v2.2), not on the load side. If supplied,
     climatology_baseline is used only to report a per-day anomaly alongside
     the strain results, as interpretive context.
+
+    METABOLIC LOAD, by contrast, DOES belong on the load side: metabolic heat
+    and environmental heat must both be shed through the same physiological
+    actuator, so they are physically additive. Each group therefore gets its
+    own heat-load series, computed from its shift metabolic rate via
+    met_adjusted_apparent_temperature(). met_by_group maps group key -> MET;
+    groups absent from it use the reference rate and are unaffected.
     """
     with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
         tmp.write(excel_blob)
@@ -436,8 +462,23 @@ def run_pyrox(excel_blob: bytes, group_names: tuple, forecast_days_used: int,
     forecast_start_idx = data.forecast_start_index(combined)
     dates = combined["date"].tolist()
 
-    # Always absolute: physiology does not renormalise to local custom.
+    # Ambient-only load. Always absolute: physiology does not renormalise to
+    # local custom. Per-group metabolic adjustment is layered on below.
     heat_loads = combined["baseline_heat_load"].tolist()
+    apparent = [
+        apparent_temperature(row.t_air_max, row.rh_mean, row.wind_mean)
+        for row in combined.itertuples()
+    ]
+
+    def loads_for_met(met: float):
+        if met is None or abs(met - MET_REFERENCE) < 1e-9:
+            return heat_loads
+        return [
+            max(0.0,
+                (met_adjusted_apparent_temperature(t, met) - HEAT_LOAD_REFERENCE_TEMP)
+                * HEAT_LOAD_PER_DEGREE)
+            for t in apparent
+        ]
 
     anomaly = None
     if climatology_baseline is not None:
@@ -447,10 +488,17 @@ def run_pyrox(excel_blob: bytes, group_names: tuple, forecast_days_used: int,
     if use_nocturnal_recovery:
         sleep_quality_series = data.sleep_quality_series(combined)
 
-    groups = {}
+    # Passed as a tuple of (key, met) pairs so st.cache_data can hash it.
+    met_lookup = dict(met_by_group) if met_by_group else {}
+
+    groups, group_loads, group_mets = {}, {}, {}
     for name in group_names:
+        met = met_lookup.get(name, MET_REFERENCE)
+        loads = loads_for_met(met)
         model = PyroxModel(TARGET_GROUPS[name])
-        groups[name] = model.simulate(heat_loads, sleep_quality_series=sleep_quality_series)
+        groups[name] = model.simulate(loads, sleep_quality_series=sleep_quality_series)
+        group_loads[name] = loads
+        group_mets[name] = met
 
     return {
         "dates": dates,
@@ -458,6 +506,9 @@ def run_pyrox(excel_blob: bytes, group_names: tuple, forecast_days_used: int,
         "groups": groups,
         "combined": combined,
         "heat_loads": heat_loads,
+        "group_loads": group_loads,
+        "group_mets": group_mets,
+        "apparent": apparent,
         "reference_used": HEAT_LOAD_REFERENCE_TEMP,
         "climatology_baseline": climatology_baseline,
         "anomaly": anomaly,
@@ -483,7 +534,8 @@ def pyrox_chart(pyrox_result: dict) -> go.Figure:
                                   (75, "danger (75%)", "#f97316"),
                                   (90, "emergency (90%)", "#dc2626")]:
         fig.add_hline(y=level, line_dash="dot", line_color=color,
-                      annotation_text=label, annotation_position="right")
+                      annotation_text=label, annotation_position="top left",
+                      annotation_font=dict(size=10, color=color))
 
     fstart = pyrox_result["forecast_start_idx"]
     if 0 < fstart < len(dates):
@@ -494,17 +546,78 @@ def pyrox_chart(pyrox_result: dict) -> go.Figure:
             line=dict(color="gray", dash="dash"),
         )
         fig.add_annotation(
-            x=x_marker, y=1, xref="x", yref="paper",
+            x=x_marker, y=1.01, xref="x", yref="paper",
             text="forecast start", showarrow=False,
             yanchor="bottom", font=dict(color="gray", size=11),
         )
 
+    # With many groups selected the horizontal legend needs several rows, which
+    # collides with a top-anchored title. Move the legend below the plot and
+    # size the figure to match the number of rows it needs.
+    n_traces = len(fig.data)
+    legend_rows = max(1, -(-n_traces // 3))  # ceil division, ~3 entries per row
+
     fig.update_layout(
-        title="PYROX \u2014 cumulative strain per group (% of critical threshold)",
+        title=dict(
+            text="PYROX \u2014 cumulative strain per group (% of critical threshold)",
+            x=0, xanchor="left", y=0.98, yanchor="top",
+        ),
         yaxis_title="% of critical_strain",
-        height=440,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        height=440 + 16 * legend_rows,
+        margin=dict(l=10, r=20, t=70, b=40 + 16 * legend_rows),
+        legend=dict(
+            orientation="h", yanchor="top", y=-0.15, xanchor="left", x=0,
+            font=dict(size=10),
+        ),
+        hovermode="x unified",
+    )
+    return fig
+
+
+def final_risk_chart(pyrox_result: dict) -> go.Figure:
+    """Continuous risk level (model Step 5), as opposed to cumulative strain.
+
+    Cumulative strain is bistable by design — it describes whether the
+    regulatory loop has opened and decompensation is running away, so it
+    tends to sit at either baseline or the ceiling. That is the correct
+    physiology but it carries little information for graded operational
+    decisions. final_risk = load * (1 - effective_acclimatization)
+    * (1 + strain_amplification * strain) varies smoothly and monotonically
+    with load, which is what an operational service needs to rank days and
+    groups. Both are shown; they answer different questions.
+    """
+    dates = [pd.Timestamp(d) for d in pyrox_result["dates"]]
+    fig = go.Figure()
+    for name, res in pyrox_result["groups"].items():
+        risk = res["final_risk"]
+        # final_risk has one entry per simulated day; dates may be one longer
+        # if the model reports an initial state, so align on the shorter one.
+        n = min(len(dates), len(risk))
+        fig.add_trace(go.Scatter(
+            x=dates[:n], y=risk[:n], mode="lines+markers",
+            name=TARGET_GROUPS[name].display_name,
+        ))
+
+    fstart = pyrox_result["forecast_start_idx"]
+    if 0 < fstart < len(dates):
+        x_marker = dates[fstart]
+        fig.add_shape(type="line", x0=x_marker, x1=x_marker, y0=0, y1=1,
+                      xref="x", yref="paper",
+                      line=dict(color="gray", dash="dash"))
+        fig.add_annotation(x=x_marker, y=1.01, xref="x", yref="paper",
+                           text="forecast start", showarrow=False,
+                           yanchor="bottom", font=dict(color="gray", size=11))
+
+    n_traces = len(fig.data)
+    legend_rows = max(1, -(-n_traces // 3))
+    fig.update_layout(
+        title=dict(text="PYROX \u2014 continuous risk level (model Step 5)",
+                   x=0, xanchor="left", y=0.98, yanchor="top"),
+        yaxis_title="final_risk (dimensionless)",
+        height=420 + 16 * legend_rows,
+        margin=dict(l=10, r=20, t=70, b=40 + 16 * legend_rows),
+        legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="left",
+                    x=0, font=dict(size=10)),
         hovermode="x unified",
     )
     return fig
@@ -517,8 +630,13 @@ def pyrox_summary_table(pyrox_result: dict) -> pd.DataFrame:
         def _date_or_dash(day_idx):
             return dates[day_idx] if day_idx is not None and day_idx < len(dates) else "\u2014"
 
+        onset = onset_temperature(name)
+        met = pyrox_result.get("group_mets", {}).get(name, MET_REFERENCE)
         rows.append({
             "Group": TARGET_GROUPS[name].display_name,
+            "MET": round(met, 1),
+            "Onset (\u00b0C)": onset if onset is not None else "\u2014",
+            "Peak risk": round(float(max(res["final_risk"])), 2),
             "Peak strain (%)": round(100 * res["peak_strain"] / res["critical_strain"], 1),
             "Caution day (50%)": _date_or_dash(res["caution_day"]),
             "Danger day (75%)": _date_or_dash(res["danger_day"]),
@@ -738,9 +856,26 @@ if st.session_state.results:
     # -------------------------------------------------------------------
     st.header("\U0001F9EC PYROX \u2014 population heat-strain risk")
     st.caption(
-        "Cumulative strain per population group over the hindcast+forecast "
-        "period, based on daily heat load (paper Sec 2.2). Deterministic "
-        "model, no Monte Carlo \u2014 runs in milliseconds."
+        "Per-group risk over the hindcast+forecast period, based on daily "
+        "heat load (paper Sec 2.2) plus metabolic load. Deterministic model, "
+        "no Monte Carlo \u2014 runs in milliseconds."
+    )
+    st.warning(
+        "\u26a0\ufe0f **Revised calibration in use \u2014 not the published "
+        "parameterisation.** Acclimatization capacities and recovery "
+        "thresholds have been re-derived (for 11 of 23 groups; the other 12 "
+        "are untouched), and a metabolic (MET) term added, to correct three "
+        "defects in the original roster: resilience counted twice "
+        "(thresholds evaluated after the acclimatization reduction), "
+        "thresholds set on a scale that real weather never reaches, and one "
+        "group assigned a capacity of 1.00 (i.e. immunity to any heat). "
+        "**PYROX's population tier has no dedicated event-level validation "
+        "against real incident data in this suite, before or after this "
+        "revision** \u2014 the r=0.866 correlation, Falmouth hindcasts, and "
+        "IRONMAN Hoorn results belong to HESTIA's individual tier, not "
+        "PYROX, and do not apply here either way. Full derivation, the "
+        "minimal-intervention rationale, and this correction: "
+        "`pyrox_revised_calibration.py`."
     )
 
     all_group_names = sorted(TARGET_GROUPS, key=lambda k: TARGET_GROUPS[k].display_name)
@@ -760,6 +895,44 @@ if st.session_state.results:
             value=False,
             help="Warm nights (low t_air_min) reduce recovery during sleep.",
         )
+
+    # -------------------------------------------------------------------
+    # Metabolic load per group. Metabolic and environmental heat are
+    # physically additive (both are shed through the same actuator), so this
+    # feeds the heat load directly. Values are shift metabolic rates, NOT
+    # 24-hour averages: the shift coincides with the daily thermal peak, and
+    # averaging across the cool night erases the signal entirely.
+    # -------------------------------------------------------------------
+    met_by_group = {}
+    if selected_groups:
+        with st.expander(
+            f"\u2699\ufe0f Metabolic load (MET) per group \u2014 "
+            f"{K_PER_MET:.2f}\u00b0C apparent-temperature equivalent per MET"
+        ):
+            st.caption(
+                "Metabolic heat produced during activity adds to the "
+                "environmental heat load, because both must be dissipated by "
+                "the same physiological actuator. The coefficient is derived "
+                f"from ISO 7243's own reference limit values ({K_PER_MET:.2f}\u00b0C "
+                f"per MET); the reference rate is {MET_REFERENCE:.1f} MET, "
+                "representing the largely resting population the original "
+                "calibration was built on. Enter the metabolic rate DURING "
+                "the shift or event, not a daily average \u2014 the working "
+                "period overlaps the daily thermal peak, and averaging over "
+                "24 hours dilutes the effect until it disappears."
+            )
+            met_cols = st.columns(min(3, len(selected_groups)))
+            for i, key in enumerate(selected_groups):
+                with met_cols[i % len(met_cols)]:
+                    met_by_group[key] = st.number_input(
+                        TARGET_GROUPS[key].display_name,
+                        min_value=0.8, max_value=16.0,
+                        value=float(default_met(key)), step=0.1,
+                        key=f"met_{key}",
+                        help=f"Default {default_met(key):.1f} MET. "
+                             f"Equivalent penalty at this rate: "
+                             f"+{K_PER_MET * (default_met(key) - MET_REFERENCE):.1f}\u00b0C.",
+                    )
 
     show_climatology = st.checkbox(
         "Add local climatological context (30-year ERA5 anomaly)",
@@ -858,22 +1031,39 @@ if st.session_state.results:
             excel_data, tuple(selected_groups),
             forecast_days_used, hindcast_days_used, use_nocturnal,
             climatology_baseline,
+            tuple(sorted(met_by_group.items())),
         )
 
         st.caption(
             f"Heat load is computed against the absolute reference of "
-            f"{HEAT_LOAD_REFERENCE_TEMP:.0f}\u00b0C apparent temperature "
-            "(Paris 2003 calibration). Physiological limits are absolute, so "
+            f"{HEAT_LOAD_REFERENCE_TEMP:.0f}\u00b0C apparent temperature, plus "
+            f"each group's metabolic contribution at {K_PER_MET:.2f}\u00b0C per MET "
+            f"above {MET_REFERENCE:.1f}. Physiological limits are absolute, so "
             "local climatology is reported as context below rather than "
             "folded into the load \u2014 see the README for why."
         )
 
+        st.markdown("**Continuous risk level** \u2014 use this to rank days and groups.")
+        st.plotly_chart(final_risk_chart(pyrox_result), use_container_width=True)
+        st.caption(
+            "final_risk varies smoothly with load and is the appropriate "
+            "signal for graded operational decisions. Cumulative strain "
+            "below answers a different question: whether the regulatory loop "
+            "has opened and decompensation is running away. Strain is "
+            "bistable by design, so it tends to sit near baseline or near "
+            "the ceiling."
+        )
+
+        st.markdown("**Cumulative strain** \u2014 decompensation state.")
         st.plotly_chart(pyrox_chart(pyrox_result), use_container_width=True)
         st.dataframe(pyrox_summary_table(pyrox_result), use_container_width=True)
         st.caption(
             "Caution/danger/emergency = the day cumulative strain first "
             "reaches 50% / 75% / 90% of that group's critical threshold. "
-            "'\u2014' means the threshold was not reached within this period."
+            "'\u2014' means the threshold was not reached within this period. "
+            "'Onset' is the apparent temperature at which the group begins "
+            "accumulating strain, which the revised calibration solves each "
+            "recovery threshold to produce."
         )
 
         # ---------------------------------------------------------------
