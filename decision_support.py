@@ -395,3 +395,4 @@ def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: floa
         st.markdown(f"**{pd.Timestamp(day).strftime('%A %d %b')}:** " + summarize_day(schedule, day))
 
 
+
