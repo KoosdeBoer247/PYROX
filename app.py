@@ -38,6 +38,8 @@ from thermopoulos_loader import (
 from pyrox_model import PyroxModel
 from pyrox_groups import TARGET_GROUPS as _ORIGINAL_GROUPS, PAPER_PROTOTYPES
 from decision_support import render_key_concepts_explainer, render_hourly_safety_panel, relative_risk_text
+from gpx_route import parse_gpx, route_summary, render_race_profile, route_map
+from terrain_lookup import fetch_landcover_along_route
 from pyrox_revised_calibration import (
     apply_revised_calibration,
     default_met,
@@ -1203,6 +1205,140 @@ if st.session_state.results:
             st.plotly_chart(fig_anom, use_container_width=True)
             st.dataframe(anomaly_df, use_container_width=True)
 
+    # -------------------------------------------------------------------
+    # Race route exposure (GPX upload)
+    # -------------------------------------------------------------------
+    st.divider()
+    st.header("\U0001F3C1 Race route exposure (GPX)")
+    st.caption(
+        "Upload a race route to see what T_air/WBGT/UTCI a runner will "
+        "actually pass through, at their own pace, and to get the "
+        "activity/rest guide restricted to their real start-to-finish "
+        "window \u2014 rather than the full day."
+    )
+    gpx_file = st.file_uploader("Race route (.gpx)", type=["gpx"])
+
+    if gpx_file is not None:
+        try:
+            parsed = parse_gpx(gpx_file)
+        except Exception as e:
+            st.error(f"Could not parse this GPX file: {e}")
+            parsed = None
+
+        if parsed is not None:
+            route_df, waypoints = parsed["route"], parsed["waypoints"]
+            if route_df.empty:
+                st.warning("No track points found in this GPX file.")
+            else:
+                summary = route_summary(route_df)
+                st.success(
+                    f"**{summary['total_km']:.2f} km** course, "
+                    f"{len(waypoints)} water post(s) found"
+                    + (
+                        f", {summary['elevation_gain_m']:.0f} m elevation gain"
+                        if summary["has_elevation"] else " (flat course)"
+                    )
+                    + "."
+                )
+
+                col_d, col_t = st.columns(2)
+                with col_d:
+                    race_date = st.date_input(
+                        "Race date", value=forecast_df.index[0].date(),
+                        min_value=forecast_df.index[0].date(),
+                        max_value=forecast_df.index[-1].date(),
+                    )
+                with col_t:
+                    race_start_clock = st.time_input("Start time", value=pd.Timestamp("19:00").time())
+
+                tz = forecast_df.index.tz
+                start_time = pd.Timestamp.combine(race_date, race_start_clock)
+                start_time = start_time.tz_localize(tz) if tz is not None else start_time
+
+                st.markdown("**Pace per profile** (minutes per km)")
+                pace_col1, pace_col2 = st.columns(2)
+                with pace_col1:
+                    pace_recreational = st.number_input(
+                        "Recreational Athletes", min_value=3.0, max_value=12.0,
+                        value=6.5, step=0.1,
+                        help=f"Default MET: {default_met('recreational_athletes'):.1f}",
+                    )
+                with pace_col2:
+                    pace_elite = st.number_input(
+                        "Elite Athletes", min_value=2.5, max_value=8.0,
+                        value=3.25, step=0.05,
+                        help=f"Default MET: {default_met('elite_athletes'):.1f}",
+                    )
+
+                if not summary["has_elevation"]:
+                    st.caption(
+                        "This course carries no usable elevation data, so no "
+                        "gradient-based metabolic adjustment is applied "
+                        "(Minetti et al. 2002 would apply it automatically "
+                        "for a hillier route)."
+                    )
+
+                use_real_terrain = st.checkbox(
+                    "Fetch real terrain along the route (ESA WorldCover, free)",
+                    value=False,
+                    help=(
+                        "Classifies land cover every ~200m along the course "
+                        "(open water, cropland, tree cover, built-up, etc.) "
+                        "from ESA's free 10m satellite land-cover map, and "
+                        "uses it to make WBGT and MRT vary by real terrain "
+                        "instead of one fixed value for the whole route. "
+                        "UTCI is not affected (fixed 10m wind by definition). "
+                        "Requires a live fetch; falls back to the sidebar's "
+                        "single terrain type on any error."
+                    ),
+                )
+                terrain_route_df = None
+                if use_real_terrain:
+                    with st.spinner("Fetching ESA WorldCover land cover along the route..."):
+                        landcover_result = fetch_landcover_along_route(route_df)
+                    if landcover_result["error"]:
+                        st.warning(landcover_result["error"])
+                    else:
+                        terrain_route_df = landcover_result["route"]
+                        terrain_counts = terrain_route_df["worldcover_label"].value_counts()
+                        st.caption(
+                            "Land cover found along the course: "
+                            + ", ".join(f"{k}: {v} pt" for k, v in terrain_counts.items())
+                        )
+
+                st.plotly_chart(
+                    route_map(
+                        route_df, waypoints,
+                        f"Course map \u2014 {summary['total_km']:.1f} km",
+                        terrain_route_df=terrain_route_df,
+                    ),
+                    use_container_width=True,
+                )
+                st.caption(
+                    (
+                        "Course coloured by ESA WorldCover land cover \u2014 the "
+                        "same classification driving the per-segment WBGT/MRT "
+                        "below. "
+                        if terrain_route_df is not None else
+                        "Tick 'Fetch real terrain' above to colour the course "
+                        "by land cover. "
+                    )
+                    + "Blue markers are water posts from the GPX. "
+                    "Map \u00a9 OpenStreetMap contributors."
+                )
+
+                render_race_profile(
+                    st, route_df, waypoints, forecast_df, "Recreational Athletes",
+                    default_met("recreational_athletes"), start_time, pace_recreational,
+                    render_hourly_safety_panel, terrain_route_df=terrain_route_df,
+                )
+                st.divider()
+                render_race_profile(
+                    st, route_df, waypoints, forecast_df, "Elite Athletes",
+                    default_met("elite_athletes"), start_time, pace_elite,
+                    render_hourly_safety_panel, terrain_route_df=terrain_route_df,
+                )
+
     st.divider()
     st.download_button(
         "\U0001F4E5 Download full dataset (Excel, multiple sheets)",
@@ -1217,3 +1353,4 @@ if st.session_state.results:
     )
 else:
     st.info("Enter a city on the left and click **Run analysis** to get started.")
+
