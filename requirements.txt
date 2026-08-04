@@ -9,3 +9,4 @@ pythermalcomfort>=2.0
 xlsxwriter>=3.0
 openpyxl>=3.0
 plotly>=5.20
+rasterio>=1.3
