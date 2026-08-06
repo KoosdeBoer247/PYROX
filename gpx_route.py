@@ -32,6 +32,10 @@ start time the user enters here.
 
 from __future__ import annotations
 
+# Module build stamp -- shown in the app sidebar so a stale file is
+# immediately identifiable instead of inferred from a traceback.
+__BUILD__ = "2026-08-06a"
+
 import math
 import xml.etree.ElementTree as ET
 
@@ -148,13 +152,32 @@ def pace_schedule(route_df: pd.DataFrame, start_time: pd.Timestamp, pace_min_per
     return out
 
 
+def _to_epoch_seconds(dt_index_or_series, reference: pd.Timestamp) -> np.ndarray:
+    """Seconds relative to a shared reference timestamp.
+
+    Deliberately NOT `.astype("int64")`: pandas may store datetimes at
+    nanosecond OR microsecond resolution depending on version and how the
+    object was constructed, and the two differ by a factor of 1000. Mixing
+    them silently pushes every query outside the interpolation range, so
+    np.interp clamps to an endpoint and every point gets the same value --
+    a flat line that looks like real (constant) weather rather than a bug.
+    Subtracting a common reference and taking total_seconds() is
+    resolution-independent.
+    """
+    delta = dt_index_or_series - reference
+    if isinstance(delta, pd.Series):
+        return delta.dt.total_seconds().to_numpy()
+    return delta.total_seconds().to_numpy()
+
+
 def interpolate_weather_along_route(route_df_timed: pd.DataFrame, weather_df: pd.DataFrame,
                                      columns=("T_air_urban", "WBGT", "UTCI", "MRT")) -> pd.DataFrame:
     """Linearly interpolate the hourly weather series onto each point's
     clock_time."""
     out = route_df_timed.copy()
-    idx_numeric = weather_df.index.astype("int64").to_numpy()
-    query_numeric = out["clock_time"].astype("int64").to_numpy()
+    reference = weather_df.index[0]
+    idx_numeric = _to_epoch_seconds(weather_df.index, reference)
+    query_numeric = _to_epoch_seconds(out["clock_time"], reference)
     for col in columns:
         if col in weather_df.columns:
             out[col] = np.interp(query_numeric, idx_numeric, weather_df[col].to_numpy())
@@ -361,6 +384,22 @@ def render_race_profile(st, route_df: pd.DataFrame, waypoints: list, weather_df:
         use_container_width=True,
         key=f"gpx_route_chart_{profile_label}",
     )
+
+    # A perfectly constant series over a race lasting an hour or more is
+    # almost certainly an interpolation failure (e.g. a datetime-resolution
+    # mismatch putting every query outside the weather series' range), not
+    # real weather. Say so rather than drawing a confident flat line.
+    varying = {c: timed[c].nunique() for c in ("T_air_urban", "WBGT", "UTCI", "MRT")
+               if c in timed.columns}
+    if varying and all(n <= 1 for n in varying.values()) and timed["elapsed_min"].iloc[-1] > 30:
+        st.warning(
+            "\u26a0\ufe0f Every value is identical along the whole course, which "
+            "is implausible for a race of this length \u2014 the weather series "
+            "and the race window may not overlap, or the interpolation "
+            "failed. Treat this chart as unreliable and check that the race "
+            "date/time falls inside the forecast period."
+        )
+
     st.caption(
         "Distance-based, not time-based: shows what this runner will "
         "actually pass through, given their own pace, at each km \u2014 "
@@ -368,11 +407,18 @@ def render_race_profile(st, route_df: pd.DataFrame, waypoints: list, weather_df:
     )
 
     race_weather = weather_df[(weather_df.index >= start_time) & (weather_df.index <= finish_time)]
-    if race_weather.empty:
-        # Race window shorter than one hourly step: pad by one step each
-        # side so the safety panel has at least two points to interpolate.
-        race_weather = weather_df[
-            (weather_df.index >= start_time - pd.Timedelta(hours=1))
-            & (weather_df.index <= finish_time + pd.Timedelta(hours=1))
-        ]
-    render_hourly_safety_panel(st, race_weather, f"{profile_label} (race window only)", effective_met)
+    # A race shorter than one clock hour (an elite 10 EM finishes in ~52 min)
+    # can fall entirely inside a single hourly slot, leaving one row. Plotly
+    # then renders a bar chart with a microsecond-wide x-axis. Pad outward
+    # until there are at least two hourly points to plot.
+    if len(race_weather) < 2:
+        pad = 1
+        while len(race_weather) < 2 and pad <= 3:
+            race_weather = weather_df[
+                (weather_df.index >= start_time - pd.Timedelta(hours=pad))
+                & (weather_df.index <= finish_time + pd.Timedelta(hours=pad))
+            ]
+            pad += 1
+
+    render_hourly_safety_panel(st, race_weather, f"{profile_label} (race window only)",
+                                effective_met, scheme="race")

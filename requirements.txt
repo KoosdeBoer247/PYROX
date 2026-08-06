@@ -1,12 +1,25 @@
 streamlit>=1.35
-numpy>=1.20
+numpy>=1.21,<2.3
 pandas>=1.3
 requests>=2.25
 pvlib>=0.9
 timezonefinder>=6.0
 pytz>=2021.1
-pythermalcomfort>=2.0
+# Must be >=4.4: earlier releases (e.g. 3.8.0) pin numba==0.53.1, which pulls
+# llvmlite==0.36.0. That refuses to build on Python 3.14 ("only versions
+# >=3.6,<3.10 are supported"), which fails the whole dependency install and
+# the app never starts. 4.x depends on numba unpinned, so a modern,
+# 3.14-compatible numba is selected instead.
+pythermalcomfort>=4.4
 xlsxwriter>=3.0
 openpyxl>=3.0
 plotly>=5.20
-rasterio>=1.3
+
+# OPTIONAL -- deliberately left commented out.
+# rasterio powers only the ESA WorldCover per-segment terrain checkbox in the
+# GPX section. It pulls GDAL, is slow to install, and on some Python versions
+# has no prebuilt wheel -- which can time out or fail the entire Streamlit
+# build, taking the whole app down for one optional feature. The app detects
+# its absence and disables just that checkbox.
+# Uncomment to enable per-segment terrain classification:
+# rasterio>=1.3

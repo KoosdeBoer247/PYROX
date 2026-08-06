@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Decision-support layer for the PYROX/Thermopoulos app
 ======================================================
@@ -36,6 +37,10 @@ judgement or for PYROX/HESTIA's own calibrated outputs.
 """
 
 from __future__ import annotations
+
+# Module build stamp -- shown in the app sidebar so a stale file is
+# immediately identifiable instead of inferred from a traceback.
+__BUILD__ = "2026-08-06a"
 
 from itertools import groupby
 from functools import lru_cache
@@ -191,6 +196,52 @@ _STATUS_STYLE = {
 }
 
 
+# =============================================================================
+# 2b. Athletics (race) WBGT flag scheme -- ACSM / IIRM lineage
+# =============================================================================
+# The occupational table above answers "how much of each hour may be spent
+# working". That is the wrong question for a road race: a runner does not
+# stop for 30 minutes mid-event, and the ISO 7243 table tops out around
+# 8 MET, so it cannot distinguish a recreational runner (~9 MET) from an
+# elite one (~13 MET) -- both clamp to the same top row.
+#
+# The athletics governing bodies instead use event-level flag categories,
+# with actions aimed at the ORGANISER (start earlier, add water, advise
+# at-risk runners to withdraw, cancel), not at the individual's work/rest
+# ratio. Boundaries below follow the ACSM road-race guidance and the IIRM
+# heat-stress flag colours widely used by race medical teams:
+#   green  < 18 C, yellow 18-23 C, red 23-28 C, black > 28 C.
+#
+# NOTE ON STATUS: these are consensus guideline thresholds for mass-
+# participation running, not validated per-runner risk predictions, and
+# they apply the same numbers to every runner regardless of fitness,
+# acclimatisation or metabolic rate -- one of the substantive criticisms of
+# using WBGT alone. They are included here because the app reports WBGT and
+# should therefore report it against the criteria the sport actually uses.
+_RACE_FLAGS = [
+    (18.0, "race_green", "#16a34a", "Low risk",
+     "Normal race conditions."),
+    (23.0, "race_yellow", "#eab308", "Moderate risk",
+     "Heat illness possible: brief runners, ensure fluids, monitor at-risk starters."),
+    (28.0, "race_red", "#dc2626", "High risk",
+     "Advise at-risk participants to withdraw; advise all runners to slow their pace; "
+     "extra water/cooling stations."),
+    (float("inf"), "race_black", "#7f1d1d", "Extreme risk",
+     "ACSM guidance: cancel, shorten, or recommend voluntary withdrawal."),
+]
+
+
+def classify_hour_race(wbgt: float) -> dict:
+    """Classify one hour against the athletics-federation race flags."""
+    if pd.isna(wbgt):
+        return {"status": "unknown", **_STATUS_STYLE["unknown"]}
+    for upper, status, colour, name, action in _RACE_FLAGS:
+        if wbgt < upper:
+            return {"status": status, "colour": colour,
+                    "label": f"{name} \u2014 {action}"}
+    return {"status": "unknown", **_STATUS_STYLE["unknown"]}
+
+
 def wbgt_limit(met: float, work_pct: int) -> float:
     """Interpolated WBGT action limit (°C) for a given metabolic rate and
     work:rest regimen (100/75/50/25% work per hour)."""
@@ -212,9 +263,15 @@ def classify_hour(wbgt: float, met: float) -> dict:
     return {"status": "emergency", **_STATUS_STYLE["emergency"]}
 
 
-def hourly_schedule(wbgt_series: pd.Series, met: float, utci_series: pd.Series = None) -> pd.DataFrame:
+def hourly_schedule(wbgt_series: pd.Series, met: float, utci_series: pd.Series = None,
+                    scheme: str = "occupational") -> pd.DataFrame:
     """Build an hour-by-hour safety classification from an hourly WBGT
     series (index = timestamps, as produced by Thermopoulos_Data_Engine).
+
+    `scheme` selects the criteria: "occupational" uses the ISO 7243 /
+    ACGIH work:rest action limits (right for a shift), "race" uses the
+    athletics-federation flag categories (right for an event, and what the
+    sport's own governing bodies actually apply -- see _RACE_FLAGS).
 
     If `utci_series` is supplied (same index), each hour is cross-checked
     against UTCI. WBGT's own formula -- 0.7x wet-bulb (humidity) + 0.2x
@@ -227,18 +284,72 @@ def hourly_schedule(wbgt_series: pd.Series, met: float, utci_series: pd.Series =
     same limitation already raised with FNV Bouw. Flagging the divergence
     here is what makes it visible instead of silently passing as 'safe'.
     """
+    benign = ({"safe", "caution_75"} if scheme == "occupational"
+              else {"race_green", "race_yellow"})
     rows = []
     for ts, wbgt in wbgt_series.items():
-        c = classify_hour(wbgt, met)
+        c = (classify_hour_race(wbgt) if scheme == "race"
+             else classify_hour(wbgt, met))
         utci_val = utci_series.get(ts) if utci_series is not None else None
         c["UTCI"] = utci_val
         c["utci_diverges"] = bool(
             utci_val is not None and not pd.isna(utci_val)
-            and c["status"] in ("safe", "caution_75")
+            and c["status"] in benign
             and utci_val >= 32.0  # UTCI "strong heat stress" threshold
         )
         rows.append({"time": ts, "WBGT": wbgt, **c})
     return pd.DataFrame(rows)
+
+
+def exposure_by_flag(weather_df: pd.DataFrame, start_time, finish_time) -> dict:
+    """How long a runner is exposed to each athletics flag category between
+    start and finish, in hours (fractional).
+
+    WHY THIS IS THE RIGHT COMPARISON BETWEEN ATHLETE LEVELS. The energy
+    cost of running is close to 1 kcal/kg/km largely independently of
+    pace, so over a FIXED distance a beginner and an elite runner produce
+    broadly similar total metabolic heat -- the beginner slowly over a long
+    time, the elite quickly over a short one. What differs sharply is time
+    spent in the heat: a two-hour finisher can sit in red-flag conditions
+    for the whole second half of a race that the winner left before the
+    worst hours arrived. That exposure difference, not a difference in
+    total heat production, is what separates the levels on race day.
+
+    Returns {flag_status: hours}, using the same _RACE_FLAGS boundaries as
+    the hourly panel.
+    """
+    start_time = pd.Timestamp(start_time)
+    finish_time = pd.Timestamp(finish_time)
+    if finish_time <= start_time or "WBGT" not in weather_df.columns:
+        return {}
+
+    totals = {}
+    idx = weather_df.index
+    for i, ts in enumerate(idx):
+        # Each row represents the hour beginning at its timestamp.
+        hour_end = idx[i + 1] if i + 1 < len(idx) else ts + pd.Timedelta(hours=1)
+        overlap_start = max(ts, start_time)
+        overlap_end = min(hour_end, finish_time)
+        if overlap_end <= overlap_start:
+            continue
+        hours = (overlap_end - overlap_start).total_seconds() / 3600.0
+        status = classify_hour_race(weather_df["WBGT"].iloc[i])["status"]
+        totals[status] = totals.get(status, 0.0) + hours
+    return totals
+
+
+def flag_display_name(status: str) -> str:
+    for _upper, s, _colour, name, _action in _RACE_FLAGS:
+        if s == status:
+            return name
+    return "No data"
+
+
+def flag_colour(status: str) -> str:
+    for _upper, s, colour, _name, _action in _RACE_FLAGS:
+        if s == status:
+            return colour
+    return "#9ca3af"
 
 
 def _consecutive_windows(schedule: pd.DataFrame, statuses: set[str]) -> list[tuple]:
@@ -256,16 +367,42 @@ def _consecutive_windows(schedule: pd.DataFrame, statuses: set[str]) -> list[tup
     return windows
 
 
-def summarize_day(schedule: pd.DataFrame, day) -> str:
+def summarize_day(schedule: pd.DataFrame, day, scheme: str = "occupational") -> str:
     """Plain-language, one-paragraph summary of a single calendar day."""
     day_df = schedule[schedule["time"].dt.date == day].reset_index(drop=True)
     if day_df.empty:
         return "No data for this day."
 
-    worst = day_df["status"].map(
-        lambda s: {"safe": 0, "caution_75": 1, "caution_50": 2,
-                   "danger": 3, "emergency": 4, "unknown": -1}[s]
-    ).max()
+    if scheme == "race":
+        rank = {"race_green": 0, "race_yellow": 1, "race_red": 2,
+                "race_black": 3, "unknown": -1}
+        bands = [({"race_green"}, "Green (low)"),
+                 ({"race_yellow"}, "Yellow (moderate)"),
+                 ({"race_red"}, "Red (high)"),
+                 ({"race_black"}, "Black (extreme)")]
+        verdicts = {
+            0: "Normal race conditions.",
+            1: "Brief runners on the heat, ensure fluids, monitor at-risk starters.",
+            2: "High risk: advise at-risk participants to withdraw and all runners "
+               "to slow their pace; add water and cooling capacity.",
+            3: "Extreme risk: ACSM guidance is to cancel, shorten, or recommend "
+               "voluntary withdrawal.",
+        }
+    else:
+        rank = {"safe": 0, "caution_75": 1, "caution_50": 2,
+                "danger": 3, "emergency": 4, "unknown": -1}
+        bands = [({"safe"}, "Safe"),
+                 ({"caution_75", "caution_50"}, "Caution"),
+                 ({"danger", "emergency"}, "Danger")]
+        verdicts = {
+            0: "Safe to work normal hours.",
+            1: "Plan extra breaks during the caution window(s).",
+            2: "Plan extra breaks during the caution window(s).",
+            3: "Reschedule heavy or outdoor tasks out of the danger window(s), if possible.",
+            4: "Reschedule heavy or outdoor tasks out of the danger window(s), if possible.",
+        }
+
+    worst = day_df["status"].map(lambda s: rank.get(s, -1)).max()
 
     def fmt_windows(statuses, verb):
         wins = _consecutive_windows(day_df, statuses)
@@ -279,21 +416,8 @@ def summarize_day(schedule: pd.DataFrame, day) -> str:
                 parts.append(f"{s.strftime('%H:%M')}\u2013{e.strftime('%H:%M')}")
         return f"{verb} {', '.join(parts)}"
 
-    pieces = []
-    safe_txt = fmt_windows({"safe"}, "Safe")
-    caution_txt = fmt_windows({"caution_75", "caution_50"}, "Caution")
-    danger_txt = fmt_windows({"danger", "emergency"}, "Danger")
-    for txt in (safe_txt, caution_txt, danger_txt):
-        if txt:
-            pieces.append(txt)
-
-    if worst <= 0:
-        verdict = "Safe to work normal hours."
-    elif worst in (1, 2):
-        verdict = "Plan extra breaks during the caution window(s)."
-    else:
-        verdict = "Reschedule heavy or outdoor tasks out of the danger window(s), if possible."
-
+    pieces = [t for t in (fmt_windows(sts, name) for sts, name in bands) if t]
+    verdict = verdicts.get(max(worst, 0), "")
     summary = " \u00b7 ".join(pieces) + f". {verdict}"
 
     if "utci_diverges" in day_df.columns and day_df["utci_diverges"].any():
@@ -303,13 +427,14 @@ def summarize_day(schedule: pd.DataFrame, day) -> str:
             f" \u26a0\ufe0f **{n} of these hour(s) ({', '.join(diverging_hours)}) are "
             "WBGT-'safe' but UTCI \u226532\u00b0C (strong heat stress)** \u2014 likely "
             "high direct-sun/radiant load that WBGT's formula under-weights. "
-            "Treat as caution, especially for unshaded work."
+            "Treat as caution, especially in unshaded sections."
         )
 
     return summary
 
 
-def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: float) -> None:
+def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: float,
+                                scheme: str = "occupational") -> None:
     """Render the full hour-by-hour safety guide for one group/MET.
 
     `df` must be an hourly weather dataframe with WBGT and (ideally) UTCI
@@ -326,29 +451,53 @@ def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: floa
         return
 
     utci_series = df["UTCI"] if "UTCI" in df.columns else None
-    schedule = hourly_schedule(df["WBGT"], met, utci_series)
+    schedule = hourly_schedule(df["WBGT"], met, utci_series, scheme=scheme)
     has_divergence = "utci_diverges" in schedule.columns and schedule["utci_diverges"].any()
 
-    st.markdown(
-        f"**\u23f0 Which hours carry elevated heat exposure for {group_label}** "
-        f"(at {met:.1f} MET, WBGT-based screening)"
-    )
-    st.caption(
-        "This uses the standard ISO 7243 / ACGIH WBGT action limits, "
-        "applied hour by hour — a same-day screening layer, shown "
-        "alongside (not instead of) PYROX's cumulative-strain view above. "
-        "For groups with a physical workload, treat the labels below as "
-        "work/rest guidance; for others, as guidance on how much of the "
-        "hour is safe to spend active and exposed versus resting/sheltered. "
-        "WBGT has known limitations as a sole metric (validated on a "
-        "narrow population, no multi-day load, coarse workload bands) — "
-        "treat this as a quick screening check, not a precise prediction. "
+    if scheme == "race":
+        st.markdown(
+            f"**\u23f0 Race heat-risk flags for {group_label}** "
+            "(athletics-federation WBGT categories)"
+        )
+    else:
+        st.markdown(
+            f"**\u23f0 Which hours carry elevated heat exposure for {group_label}** "
+            f"(at {met:.1f} MET, WBGT-based screening)"
+        )
+    _utci_note = (
         "Hours outlined in black are cross-checked against UTCI: WBGT "
         "weights radiant/solar load at only 20% (vs. 70% for humidity), so "
-        "it can call an hour 'safe' during high direct-sun exposure that "
+        "it can call an hour benign during high direct-sun exposure that "
         "UTCI already flags as strong heat stress — outlined hours are "
         "where that happens."
     )
+    if scheme == "race":
+        st.caption(
+            "Flag categories as used by the athletics governing bodies for "
+            "road races (ACSM guidance / IIRM heat-stress flags): green "
+            "below 18°C, yellow 18–23°C, red 23–28°C, black above 28°C WBGT. "
+            "These are event-level criteria aimed at the organiser — start "
+            "time, water, cooling, advising withdrawal — not work/rest "
+            "ratios, which are meaningless mid-race. Note they apply the "
+            "SAME numbers to every runner regardless of pace, fitness or "
+            "acclimatisation, and take no account of metabolic heat "
+            "production; that is a known limitation of judging a race on "
+            "WBGT alone, and is why the PYROX per-group view above is shown "
+            "beside this rather than replaced by it. " + _utci_note
+        )
+    else:
+        st.caption(
+            "This uses the standard ISO 7243 / ACGIH WBGT action limits, "
+            "applied hour by hour — a same-day screening layer, shown "
+            "alongside (not instead of) PYROX's cumulative-strain view above. "
+            "For groups with a physical workload, treat the labels below as "
+            "work/rest guidance; for others, as guidance on how much of the "
+            "hour is safe to spend active and exposed versus resting/sheltered. "
+            "WBGT has known limitations as a sole metric (validated on a "
+            "narrow population, no multi-day load, coarse workload bands) — "
+            "treat this as a quick screening check, not a precise prediction. "
+            + _utci_note
+        )
 
     # Colour-coded hourly bar. Diverging hours get a dark outline so the
     # WBGT-only "safe" colour doesn't silently hide the UTCI disagreement.
@@ -382,17 +531,20 @@ def render_hourly_safety_panel(st, df: pd.DataFrame, group_label: str, met: floa
     )
     st.plotly_chart(fig, use_container_width=True, key=f"hourly_safety_{group_label}")
 
-    legend_html = "  ".join(
-        "<span style='color:{colour}'>\u25cf</span> {label}".format(**v)
-        for k, v in _STATUS_STYLE.items() if k != "unknown"
-    )
+    if scheme == "race":
+        legend_html = "  ".join(
+            f"<span style='color:{colour}'>\u25cf</span> {name}"
+            for _u, _s, colour, name, _a in _RACE_FLAGS
+        )
+    else:
+        legend_html = "  ".join(
+            "<span style='color:{colour}'>\u25cf</span> {label}".format(**v)
+            for k, v in _STATUS_STYLE.items() if k != "unknown"
+        )
     if has_divergence:
         legend_html += "  \u25a1 outlined = WBGT/UTCI disagree (see caption)"
     st.markdown(legend_html, unsafe_allow_html=True)
 
     # Per-day plain-language summary
     for day in sorted(schedule["time"].dt.date.unique()):
-        st.markdown(f"**{pd.Timestamp(day).strftime('%A %d %b')}:** " + summarize_day(schedule, day))
-
-
-
+        st.markdown(f"**{pd.Timestamp(day).strftime('%A %d %b')}:** " + summarize_day(schedule, day, scheme))

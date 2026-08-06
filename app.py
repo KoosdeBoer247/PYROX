@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 PYROX — heat-risk web app
 =========================
@@ -39,7 +40,16 @@ from pyrox_model import PyroxModel
 from pyrox_groups import TARGET_GROUPS as _ORIGINAL_GROUPS, PAPER_PROTOTYPES
 from decision_support import render_key_concepts_explainer, render_hourly_safety_panel, relative_risk_text
 from gpx_route import parse_gpx, route_summary, render_race_profile, route_map
-from terrain_lookup import fetch_landcover_along_route
+from loop_view import render_loop_view
+from evidence import render_evidence_panel
+from plain_view import render_plain_view
+from terrain_lookup import fetch_landcover_along_route, RASTERIO_AVAILABLE
+
+# Bumped whenever app.py / decision_support.py / gpx_route.py /
+# terrain_lookup.py change. Shown in the sidebar so the running version is
+# visible at a glance -- guessing which code is deployed from a traceback
+# wastes far more time than displaying it.
+APP_BUILD = "2026-08-06a (athletics WBGT race flags)"
 from pyrox_revised_calibration import (
     apply_revised_calibration,
     default_met,
@@ -154,20 +164,29 @@ with st.expander("\u2139\uFE0F What do T_air, MRT, WBGT, and UTCI mean?"):
 
 # =============================================================================
 # Cached wrappers around the engine's I/O functions
-# (cache_data keyed on the actual arguments; TTL keeps forecasts from going stale)
+# (cache_data keyed on the actual arguments; TTL set per data type)
 # =============================================================================
+# TTLs are tuned to how fast each source actually changes, to stay well
+# clear of Open-Meteo's free-tier limits (10,000/day, 5,000/hour,
+# 600/minute -- counted per IP, so several apps on the same host share one
+# quota). Serving a forecast that is up to an hour old is harmless;
+# re-fetching it every 30 minutes is not free.
+CACHE_TTL_GEOCODE = 60 * 60 * 24 * 30   # 30 days: city coordinates don't move
+CACHE_TTL_FORECAST = 60 * 60 * 2        # 2 hours: Open-Meteo refreshes hourly
+CACHE_TTL_HISTORICAL = 60 * 60 * 24 * 7  # 7 days: past ERA5 records are immutable
 
-@st.cache_data(ttl=1800, show_spinner=False)
+
+@st.cache_data(ttl=CACHE_TTL_GEOCODE, show_spinner=False)
 def cached_geocode(city_name: str):
     return with_retry(geocode_city_candidates, city_name)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=CACHE_TTL_FORECAST, show_spinner=False)
 def cached_forecast(lat: float, lon: float, tz: str, days: int):
     return with_retry(fetch_hourly_forecast, lat, lon, tz, days=days)
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=CACHE_TTL_HISTORICAL, show_spinner=False)
 def cached_historical(lat: float, lon: float, tz: str, start: str, end: str):
     return with_retry(fetch_historical_data, lat, lon, tz, start, end)
 
@@ -413,7 +432,7 @@ def climatological_anomaly(combined: pd.DataFrame, climatology_baseline: float) 
     )
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=CACHE_TTL_FORECAST, show_spinner=False)
 def run_pyrox(excel_blob: bytes, group_names: tuple, forecast_days_used: int,
               hindcast_days_used: int, use_nocturnal_recovery: bool,
               climatology_baseline: float = None,
@@ -694,6 +713,33 @@ with st.sidebar:
 
     st.divider()
     run_button = st.button("\U0001F680 Run analysis", type="primary", use_container_width=True)
+
+    # Per-module build stamps. A partial upload (some files updated, some
+    # not) produces confusing symptoms that look like logic bugs, so make
+    # any mismatch visible here instead of leaving it to be inferred.
+    import decision_support as _ds, gpx_route as _gr, terrain_lookup as _tl
+    import pyrox_bridge as _pb, loop_view as _lv, evidence as _ev, plain_view as _pv
+    _module_builds = {
+        "decision_support": getattr(_ds, "__BUILD__", "unstamped"),
+        "gpx_route": getattr(_gr, "__BUILD__", "unstamped"),
+        "terrain_lookup": getattr(_tl, "__BUILD__", "unstamped"),
+        "pyrox_bridge": getattr(_pb, "__BUILD__", "unstamped"),
+        "loop_view": getattr(_lv, "__BUILD__", "unstamped"),
+        "evidence": getattr(_ev, "__BUILD__", "unstamped"),
+        "plain_view": getattr(_pv, "__BUILD__", "unstamped"),
+    }
+    _expected = APP_BUILD.split(" ")[0]
+    _stale = [n for n, b in _module_builds.items() if b != _expected]
+    st.caption(f"Build {APP_BUILD}")
+    if _stale:
+        st.error(
+            "\u26a0\ufe0f Out-of-date file(s): **" + ", ".join(f"{n}.py" for n in _stale) +
+            "**. These were not updated with the rest of the app, so results "
+            "from them may be wrong. Re-upload them and reboot."
+        )
+        with st.expander("Module versions"):
+            for n, b in _module_builds.items():
+                st.caption(f"{n}.py: {b} (expected {_expected})")
 
 # =============================================================================
 # Session state
@@ -1090,6 +1136,11 @@ if st.session_state.results:
         )
 
         if is_simple:
+            render_plain_view(
+                st, pyrox_result,
+                {k: TARGET_GROUPS[k].display_name for k in pyrox_result["groups"]},
+            )
+            st.divider()
             st.markdown("**Cumulative strain** \u2014 how close each group is to the danger point.")
             st.plotly_chart(pyrox_chart(pyrox_result), use_container_width=True)
             simple_table = pyrox_summary_table(pyrox_result).drop(columns=["Peak risk (raw)"])
@@ -1160,11 +1211,24 @@ if st.session_state.results:
             "cumulative-strain view above, which is the one that captures "
             "multi-day load. Based on the forecast period only."
         )
+        # Athlete groups are judged against the athletics federations' own
+        # race flags rather than the occupational work/rest table: a runner
+        # cannot take a 30-minute break mid-event, and ISO 7243 tops out
+        # near 8 MET so it cannot separate a 9 MET recreational runner from
+        # a 13 MET elite one anyway.
+        _ATHLETE_GROUPS = {"elite_athletes", "recreational_athletes"}
         for g in selected_groups:
             render_hourly_safety_panel(
                 st, forecast_df, TARGET_GROUPS[g].display_name,
                 met_by_group.get(g, default_met(g)),
+                scheme="race" if g in _ATHLETE_GROUPS else "occupational",
             )
+
+        st.divider()
+        render_loop_view(
+            st, pyrox_result, forecast_df,
+            {k: TARGET_GROUPS[k].display_name for k in pyrox_result["groups"]},
+        )
 
         # ---------------------------------------------------------------
         # Climatological context (separate from, not folded into, the model)
@@ -1281,6 +1345,7 @@ if st.session_state.results:
                 use_real_terrain = st.checkbox(
                     "Fetch real terrain along the route (ESA WorldCover, free)",
                     value=False,
+                    disabled=not RASTERIO_AVAILABLE,
                     help=(
                         "Classifies land cover every ~200m along the course "
                         "(open water, cropland, tree cover, built-up, etc.) "
@@ -1290,8 +1355,20 @@ if st.session_state.results:
                         "UTCI is not affected (fixed 10m wind by definition). "
                         "Requires a live fetch; falls back to the sidebar's "
                         "single terrain type on any error."
+                    ) if RASTERIO_AVAILABLE else (
+                        "Unavailable in this deployment: the optional "
+                        "'rasterio' package is not installed. Everything else "
+                        "works normally."
                     ),
                 )
+                if not RASTERIO_AVAILABLE:
+                    st.caption(
+                        "\u2139\ufe0f Per-segment terrain classification is switched off in "
+                        "this deployment (optional `rasterio` package not "
+                        "installed). The whole route uses the single terrain "
+                        "type selected in the sidebar \u2014 all other results are "
+                        "unaffected."
+                    )
                 terrain_route_df = None
                 if use_real_terrain:
                     with st.spinner("Fetching ESA WorldCover land cover along the route..."):
@@ -1340,6 +1417,9 @@ if st.session_state.results:
                 )
 
     st.divider()
+    render_evidence_panel(st)
+
+    st.divider()
     st.download_button(
         "\U0001F4E5 Download full dataset (Excel, multiple sheets)",
         data=excel_data,
@@ -1353,4 +1433,3 @@ if st.session_state.results:
     )
 else:
     st.info("Enter a city on the left and click **Run analysis** to get started.")
-

@@ -47,6 +47,26 @@ silent failure or a fabricated result.
 
 from __future__ import annotations
 
+# Module build stamp -- shown in the app sidebar so a stale file is
+# immediately identifiable instead of inferred from a traceback.
+__BUILD__ = "2026-08-06a"
+
+# rasterio is OPTIONAL. It is needed only to read the remote ESA WorldCover
+# COGs for the per-segment terrain feature; every other part of the app
+# (weather, indices, PYROX, activity/rest guide, GPX pace/exposure, course
+# map) works without it. It is a heavy dependency (pulls GDAL) and on some
+# Python versions has no prebuilt wheel, which can fail or time out the whole
+# Streamlit build -- taking the entire app down for one optional checkbox.
+# So: import defensively here, expose a flag, and degrade gracefully.
+try:
+    import rasterio as _rasterio
+    RASTERIO_AVAILABLE = True
+    RASTERIO_IMPORT_ERROR = None
+except Exception as _exc:  # ImportError, or a broken GDAL install
+    _rasterio = None
+    RASTERIO_AVAILABLE = False
+    RASTERIO_IMPORT_ERROR = str(_exc)
+
 import math
 
 import numpy as np
@@ -64,22 +84,28 @@ from pythermalcomfort.models import wbgt as _wbgt
 
 WORLDCOVER_BASE_URL = "https://esa-worldcover.s3.amazonaws.com/v200/2021/map"
 
-# ESA WorldCover 11-class legend -> nearest ROUGHNESS_Z0_TERRAIN key (1-6).
-# See ROUGHNESS_Z0_TERRAIN in Thermopoulos_Data_Engine.py for the z0 values
-# and Dutch labels themselves.
+# ESA WorldCover 11-class legend -> nearest ROUGHNESS_Z0_TERRAIN key.
+# NOTE: ROUGHNESS_Z0_TERRAIN is keyed by STRINGS ('1'..'6'), not ints --
+# it backs a CLI input() prompt in Thermopoulos_Data_Engine. Keys here
+# must match that exactly or the lookup raises KeyError.
+# See ROUGHNESS_Z0_TERRAIN for the z0 values and Dutch labels themselves.
 _WORLDCOVER_TO_ROUGHNESS_KEY = {
-    10: 4,   # Tree cover            -> Parkland/verspreide bebouwing, bomen
-    20: 3,   # Shrubland             -> Open agrarisch terrein
-    30: 3,   # Grassland             -> Open agrarisch terrein
-    40: 3,   # Cropland              -> Open agrarisch terrein
-    50: 5,   # Built-up              -> Voorstedelijk (conservative default; see caveat above)
-    60: 2,   # Bare / sparse veg.    -> Open kust/strand/kort gras
-    70: 1,   # Snow and ice          -> Open water/zee (roughness proxy)
-    80: 1,   # Permanent water       -> Open water/zee
-    90: 1,   # Herbaceous wetland    -> Open water/zee
-    95: 1,   # Mangroves             -> Open water/zee
-    100: 2,  # Moss and lichen       -> Open kust/strand/kort gras
+    10: "4",   # Tree cover            -> Parkland/verspreide bebouwing, bomen
+    20: "3",   # Shrubland             -> Open agrarisch terrein
+    30: "3",   # Grassland             -> Open agrarisch terrein
+    40: "3",   # Cropland              -> Open agrarisch terrein
+    50: "5",   # Built-up              -> Voorstedelijk (conservative default; see caveat above)
+    60: "2",   # Bare / sparse veg.    -> Open kust/strand/kort gras
+    70: "1",   # Snow and ice          -> Open water/zee (roughness proxy)
+    80: "1",   # Permanent water       -> Open water/zee
+    90: "1",   # Herbaceous wetland    -> Open water/zee
+    95: "1",   # Mangroves             -> Open water/zee
+    100: "2",  # Moss and lichen       -> Open kust/strand/kort gras
 }
+
+# Fallback for any class not in the table above (e.g. 0 = no data):
+# open farmland, the middle of the roughness range.
+_DEFAULT_ROUGHNESS_KEY = "3"
 
 _WORLDCOVER_LABELS = {
     10: "Tree cover", 20: "Shrubland", 30: "Grassland", 40: "Cropland",
@@ -115,7 +141,15 @@ def fetch_landcover_along_route(route_df: pd.DataFrame, sample_every_km: float =
     Never raises -- callers should check "error" and fall back to the
     manual terrain selector on failure.
     """
-    import rasterio
+    if not RASTERIO_AVAILABLE:
+        return {
+            "route": route_df, "tiles_used": [], "error":
+            "Terrain classification is unavailable in this deployment "
+            "(the optional 'rasterio' package is not installed: "
+            f"{RASTERIO_IMPORT_ERROR}). Everything else works normally; the "
+            "route uses the single terrain type selected in the sidebar."
+        }
+    rasterio = _rasterio
 
     out = route_df.copy()
     if out.empty:
@@ -161,10 +195,14 @@ def fetch_landcover_along_route(route_df: pd.DataFrame, sample_every_km: float =
     wc_series = pd.Series(classes).reindex(range(len(out)))
     wc_series = wc_series.interpolate(method="nearest").ffill().bfill()
     out["worldcover_class"] = wc_series.astype(int)
-    out["roughness_key"] = out["worldcover_class"].map(_WORLDCOVER_TO_ROUGHNESS_KEY).fillna(3).astype(int)
+    out["roughness_key"] = out["worldcover_class"].map(
+        lambda c: _WORLDCOVER_TO_ROUGHNESS_KEY.get(int(c), _DEFAULT_ROUGHNESS_KEY)
+    )
     out["roughness_z0"] = out["roughness_key"].map(lambda k: ROUGHNESS_Z0_TERRAIN[k][1])
     out["terrain_label"] = out["roughness_key"].map(lambda k: ROUGHNESS_Z0_TERRAIN[k][0])
-    out["worldcover_label"] = out["worldcover_class"].map(_WORLDCOVER_LABELS)
+    out["worldcover_label"] = out["worldcover_class"].map(
+        lambda c: _WORLDCOVER_LABELS.get(int(c), f"Unclassified ({int(c)})")
+    )
 
     return {"route": out, "tiles_used": list(tiles_used.keys()), "error": None}
 
@@ -182,8 +220,13 @@ def recompute_wbgt_mrt_for_terrain(route_df_timed: pd.DataFrame, weather_df: pd.
     must carry those raw columns (the app's forecast_df does).
     """
     out = route_df_timed.copy()
-    idx_numeric = weather_df.index.astype("int64").to_numpy()
-    query_numeric = out["clock_time"].astype("int64").to_numpy()
+    # Same resolution hazard as in gpx_route.interpolate_weather_along_route:
+    # astype("int64") is ns or us depending on pandas' chosen resolution, so
+    # use the shared helper instead (see its docstring).
+    from gpx_route import _to_epoch_seconds
+    reference = weather_df.index[0]
+    idx_numeric = _to_epoch_seconds(weather_df.index, reference)
+    query_numeric = _to_epoch_seconds(out["clock_time"], reference)
 
     needed = ["T_air_urban", "RH", "pressure", "cloud_cover",
               "solar_radiation", "solar_elevation", "wind_10m"]
