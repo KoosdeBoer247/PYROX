@@ -55,7 +55,18 @@ import logging
 import numpy as np
 import pandas as pd
 import pvlib
-from timezonefinder import TimezoneFinder
+
+# OPTIONAL. TimezoneFinder is not used anywhere in this module -- the
+# timezone comes from the geocoding API response -- and is only genuinely
+# needed by hestia_model.py, which is not part of the Streamlit apps. It is
+# imported defensively because on Python 3.14 timezonefinder ships no
+# prebuilt wheel and has to compile from source, which stalls the deploy
+# build indefinitely. Keeping the name bound preserves the suite's import
+# surface for anything that expects it.
+try:
+    from timezonefinder import TimezoneFinder
+except ImportError:  # pragma: no cover - environment-dependent
+    TimezoneFinder = None
 
 # Pythermalcomfort imports
 from pythermalcomfort.models import wbgt, utci
