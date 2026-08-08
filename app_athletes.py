@@ -53,7 +53,7 @@ from evidence import render_evidence_panel
 from plain_view import render_plain_view
 from experimental_risk import render_experimental_section
 
-APP_BUILD = "2026-08-08e (NaN gaps now visible in timeline chart)"
+APP_BUILD = "2026-08-08f (reserve cards scoped to chosen date)"
 
 # -----------------------------------------------------------------------------
 # Athlete levels. Each maps to an existing PYROX group -- no new calibration is
@@ -616,7 +616,7 @@ if st.session_state.results and selected_levels:
         tuple(sorted(met_by_group.items())),
     )
 
-    render_plain_view(st, pyrox_result, label_for)
+    render_plain_view(st, pyrox_result, label_for, target_date=exp_date)
 
     st.divider()
     level_modes = {lvl: LEVELS[lvl]["mode"] for lvl in selected_levels}

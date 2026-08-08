@@ -30,7 +30,7 @@ DESIGN CHOICES, AND WHY
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-08e"
+__BUILD__ = "2026-08-08f"
 
 import numpy as np
 import pandas as pd
@@ -141,14 +141,18 @@ def render_status_cards(st, pyrox_result: dict, label_for: dict,
             # NaN correctly.
             idx = int(np.nanargmin(reserve))
         when = pd.Timestamp(dates[idx]).strftime("%a %d %b") if idx < len(dates) else ""
+        if day_index is not None:
+            subtitle = f"on your chosen date \u2014 {when}"
+        else:
+            subtitle = f"lowest point in this period \u2014 {when}"
         st.markdown(
             status_card_html(label_for.get(name, name), reserve[idx],
-                             subtitle=f"lowest point in this period \u2014 {when}"),
+                             subtitle=subtitle),
             unsafe_allow_html=True,
         )
 
 
-def battery_timeline_chart(pyrox_result: dict, label_for: dict):
+def battery_timeline_chart(pyrox_result: dict, label_for: dict, target_date=None):
     """Reserve over time as a filled area with coloured comfort zones —
     small multiples, one row per group, so nobody has to decode a legend."""
     import plotly.graph_objects as go
@@ -193,6 +197,9 @@ def battery_timeline_chart(pyrox_result: dict, label_for: dict):
                                (25, 50, "rgba(234,179,8,0.13)")]:
             fig.add_hrect(y0=y0, y1=y1, line_width=0, fillcolor=colour,
                           row=r, col=1)
+        if target_date is not None:
+            fig.add_vline(x=pd.Timestamp(target_date), line_dash="dash",
+                          line_color="#111827", row=r, col=1)
         fig.update_yaxes(range=[0, 105], title_text="% left", row=r, col=1,
                          title_font=dict(size=10))
 
@@ -209,12 +216,32 @@ def battery_timeline_chart(pyrox_result: dict, label_for: dict):
     return fig
 
 
-def render_plain_view(st, pyrox_result: dict, label_for: dict) -> None:
-    """The whole lay-reader layer."""
-    render_status_cards(st, pyrox_result, label_for)
+def render_plain_view(st, pyrox_result: dict, label_for: dict,
+                      target_date=None) -> None:
+    """The whole lay-reader layer.
+
+    `target_date`, if given (e.g. the race/session date chosen elsewhere
+    in the app), scopes the reserve cards to THAT specific day instead of
+    the worst day anywhere across the whole multi-week hindcast+forecast
+    window. Without it, "lowest point in this period" can land on a date
+    the user never asked about (e.g. the very first day of a 24-day
+    combined window) rather than the day they actually chose.
+    """
+    day_index = None
+    if target_date is not None:
+        dates = pyrox_result["dates"]
+        target = pd.Timestamp(target_date).date()
+        matches = [i for i, d in enumerate(dates) if pd.Timestamp(d).date() == target]
+        if matches:
+            day_index = matches[0]
+        # If the chosen date falls outside the computed window entirely,
+        # fall back to the worst-day view (day_index stays None) rather
+        # than silently showing the wrong day.
+
+    render_status_cards(st, pyrox_result, label_for, day_index=day_index)
 
     with st.expander("Show how the reserve changes day by day"):
-        fig = battery_timeline_chart(pyrox_result, label_for)
+        fig = battery_timeline_chart(pyrox_result, label_for, target_date=target_date)
         st.plotly_chart(fig, use_container_width=True, key="plain_battery_timeline")
         if getattr(fig, "_pyrox_any_missing_data", False):
             st.warning(
@@ -227,6 +254,7 @@ def render_plain_view(st, pyrox_result: dict, label_for: dict) -> None:
             "Each band is one group. The line falls when heat outpaces what "
             "the body can shed and rises when there is time to recover. "
             "Yellow and red mark where the margin is getting thin."
+            + (" The dashed line marks your chosen date." if target_date is not None else "")
         )
 
     st.caption(
