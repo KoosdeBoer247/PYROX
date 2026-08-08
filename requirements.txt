@@ -21,11 +21,21 @@ xlsxwriter>=3.0
 openpyxl>=3.0
 plotly>=5.20
 
-# OPTIONAL -- deliberately left commented out.
-# rasterio powers only the ESA WorldCover per-segment terrain checkbox in the
-# GPX section. It pulls GDAL, is slow to install, and on some Python versions
-# has no prebuilt wheel -- which can time out or fail the entire Streamlit
-# build, taking the whole app down for one optional feature. The app detects
-# its absence and disables just that checkbox.
-# Uncomment to enable per-segment terrain classification:
-# rasterio>=1.3
+# rasterio powers the ESA WorldCover per-segment terrain checkbox in the
+# GPX section. Previously left commented out because the app was running on
+# Python 3.14 (Streamlit Community Cloud's then-default), where rasterio and
+# several of its build-time dependencies had no prebuilt wheel and could
+# stall the whole deploy build. Now that the app is pinned to Python 3.12
+# (see HANDLEIDING.md, "kies Python 3.12"), rasterio 1.5.0 has a prebuilt
+# manylinux wheel (bundles GDAL, ~38MB, verified to install cleanly on
+# cp312) and installs in seconds. The app still degrades gracefully
+# (RASTERIO_AVAILABLE in terrain_lookup.py) if this is ever removed again.
+rasterio>=1.5
+
+# HESTIA individual-tier bridge (experimental_risk.py's HESTIA section).
+# Imported defensively -- its absence disables only that one section, not
+# the app -- but these make it actually available.
+matplotlib>=3.7
+seaborn>=0.12
+tqdm>=4.60
+colorama>=0.4

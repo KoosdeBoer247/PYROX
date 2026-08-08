@@ -14,7 +14,7 @@ plainly as the supported ones.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-06a"
+__BUILD__ = "2026-08-08c"
 
 
 # Each entry: the claim the app makes, the sources, and the honest limit.

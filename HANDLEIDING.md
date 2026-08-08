@@ -46,6 +46,12 @@ uit elkaar, en niets waarschuwt je daarvoor.
 | `evidence.py` | Onderbouwing per claim, inclusief wat *niet* is aangetoond |
 | `gpx_route.py` | GPX inlezen, tempo/blootstelling langs de route, kaartje |
 | `terrain_lookup.py` | ESA WorldCover terreinclassificatie (optioneel) |
+| `hestia_bridge.py` | HESTIA-koppeling: snelle schatting + volledige Monte Carlo, gecacht |
+| `hestia_model.py` | **HESTIA individuele-tier model** (JOS-3, CVR, EHS-uitkomsten) |
+| `HESTIA_CVR_Module_v2.py` | Cardiovasculaire reserve-module (Lloyd et al. 2022) |
+| `HESTIA_CVR_Console.py` | Ondersteunend bestand voor de CVR-module |
+| `HESTIA_ControlFailure_Module.py` | Thermoregulatoire regelfalen-metriek (experimenteel) |
+| `experimental_risk.py` | Experimentele sectie: collapse risk, EHS-indicatoren, HESTIA-weergave |
 
 ### Modelbestanden — **NIET hier bewerken**
 
@@ -57,9 +63,7 @@ uit elkaar, en niets waarschuwt je daarvoor.
 | `Thermopoulos_Data_Engine.py` | Weerdata + thermische indices |
 | `thermopoulos_loader.py` | Leest de Excel-uitvoer in voor PYROX |
 
-Deze vijf zijn bit-identiek aan de HESTIA-PYROX-suite. Pas ze aan **in de
-suite** en kopieer ze hierheen. Doe je het andersom, dan lopen je onderzoek
-en je app uit elkaar zonder dat iemand het merkt.
+Deze acht (de vijf hierboven plus `hestia_model.py`, `HESTIA_CVR_Module_v2.py`, `HESTIA_CVR_Console.py` en `HESTIA_ControlFailure_Module.py`) zijn afgeleid van de HESTIA-PYROX-suite. `hestia_model.py` bevat twee kleine, gedocumenteerde afwijkingen van de suite-versie (defensieve `timezonefinder`-import, gecachete `get_air_quality`) — zie de docstrings erin. Pas inhoudelijke wijzigingen aan **in de suite** en draag alleen deze twee fixes handmatig opnieuw over als je de suite-versie kopieert. Doe je het andersom, dan lopen je onderzoek en je app uit elkaar zonder dat iemand het merkt.
 
 ### Overig
 
@@ -109,9 +113,35 @@ in plaats van de inhoud. Verwijder alles en doe het opnieuw.
 
 ## 4. Streamlit: de twee apps
 
+### ⚠️ EERST: kies Python 3.12
+
+Dit is de belangrijkste instelling van het hele project, en de enige die je
+**niet achteraf kunt wijzigen**.
+
+`pythermalcomfort` eist `numpy<2.3`, en voor die numpy-versies bestaat geen
+kant-en-klare wheel voor Python 3.14. Pip moet numpy dan vanuit broncode
+compileren — dat duurt tien minuten of meer, en Streamlit herstart de machine
+voordat het klaar is. Je ziet dan eindeloos "Your app is in the oven" en een
+log die stopt na "Resolved N packages".
+
+Op **Python 3.12** bestaan voor alles wheels en installeert het in enkele
+minuten.
+
+Bij het aanmaken van een app: klik op **Advanced settings** en zet
+"Python version" op **3.12**. Een `runtime.txt` in de repo werkt hier NIET —
+Community Cloud negeert die.
+
+Heb je een app al gedeployed op de verkeerde versie, dan moet je hem
+**verwijderen en opnieuw aanmaken**. De Python-versie is achteraf niet
+aanpasbaar. Je subdomein komt direct weer vrij, dus je kunt dezelfde URL
+opnieuw kiezen.
+
+
+
 ### De eerste app (bestaat al)
 
 Repository: je PYROX-repo · Branch: `main` · **Main file path: `app.py`**
+· Advanced settings → **Python 3.12**
 
 ### De tweede app aanmaken
 
@@ -119,7 +149,8 @@ Repository: je PYROX-repo · Branch: `main` · **Main file path: `app.py`**
 2. Repository: **dezelfde repo**
 3. Branch: `main`
 4. **Main file path: `app_athletes.py`** ← het enige verschil
-5. Kies een herkenbare URL, bijvoorbeeld `pyrox-events`
+5. **Advanced settings → Python version: 3.12**
+6. Kies een herkenbare URL, bijvoorbeeld `pyrox-events`
 
 ### Na elke upload
 
@@ -161,7 +192,55 @@ nooit meer uit een foutmelding af te leiden welk bestand achterloopt.
 Er is geen traceback, dus de app crashte vóór het renderen. Ga naar
 **Manage app** en lees de log. Meestal is het de installatie van pakketten.
 
-### De log stopt na "Resolved N packages"
+### HESTIA — geheugengebruik, een reëel risico
+
+HESTIA importeert matplotlib/seaborn/scipy bovenop wat de app al gebruikt.
+Gemeten: **384 MB** in één proces, vóór er ook maar één simulatie draait.
+Bij de volledige-precisie-run (n=5000) groeit dat verder doordat elke
+worker tijdens het rekenen eigen geheugen opbouwt.
+
+De worker-pool staat daarom bewust laag ingesteld (`MAX_WORKERS = 2` in
+`hestia_bridge.py`) — niet op het aantal CPU-cores, maar met geheugen als
+grens. Streamlit Cloud's gratis laag heeft doorgaans rond de 1 GB RAM
+(niet geverifieerd voor deze specifieke deployment).
+
+**Een out-of-memory-crash op Streamlit Cloud ziet er identiek uit aan de
+gewone "Oh no"-foutpagina**, zonder traceback — makkelijk te verwarren
+met een codefout. Zie je die melding specifiek bij het klikken op "Run
+full precision", verhoog dan `MAX_WORKERS` niet zomaar, maar verlaag eerst
+`QUICK_N` of de standaard n=5000 voor de volledige run.
+
+### rasterio (terreinclassificatie) — status
+
+Sinds de app op Python 3.12 draait, staat `rasterio` weer actief in
+`requirements.txt`. Op 3.12 bestaat een kant-en-klare wheel (~38 MB, GDAL
+zit erin), dus dit installeert in enkele seconden — geen compilatie meer
+nodig, in tegenstelling tot de eerdere situatie op Python 3.14.
+
+Wordt de app ooit teruggezet naar een Python-versie zonder wheel voor
+rasterio, dan valt de app niet om: `terrain_lookup.py` detecteert de
+afwezigheid zelf (`RASTERIO_AVAILABLE`) en schakelt alleen het
+terreinvinkje uit, met een duidelijke melding in de app.
+
+### De app blijft hangen op "Your app is in the oven"
+
+De log stopt na "Resolved N packages" en er komt niets meer bij. Dat betekent
+dat pip een pakket vanuit **broncode probeert te compileren** omdat er geen
+kant-en-klare wheel is voor de Python-versie die Streamlit gebruikt. Dat kan
+eindeloos duren.
+
+Zo spoor je de dader op: kijk op `pypi.org/pypi/<pakketnaam>/json` welke
+`cp`-tags de wheels hebben. Staat `cp314` er niet bij terwijl Streamlit op
+Python 3.14 draait, dan is dat het pakket.
+
+Dit gebeurde met **`timezonefinder`** (alleen een cp311-wheel). Dat pakket is
+daarom uit `requirements.txt` gehaald: het werd in
+`Thermopoulos_Data_Engine.py` wel geïmporteerd maar nooit gebruikt — de
+tijdzone komt uit de geocoding-API. De import is nu defensief, dus de afwezigheid
+is onschadelijk. **Let op:** `hestia_model.py` in de suite gebruikt het wél
+echt, dus houd het lokaal geïnstalleerd als je de HESTIA-tier draait.
+
+### De log stopt na "Resolved N packages" (overige gevallen)
 
 De installatie loopt vast of duurt te lang, en Streamlit herstart de machine
 (je ziet dan bovenin een nieuwe "Provisioning machine" met een latere tijd).
@@ -254,6 +333,7 @@ Bij elke nieuwe upload:
 - [ ] Bestanden gesleept, niet geplakt
 - [ ] Alles in de root, geen submap, geen namen met haakjes
 - [ ] Streamlit gereboot
+- [ ] App draait op Python 3.12 (zie de eerste logregels)
 - [ ] Build-regel zichtbaar in de zijbalk
 - [ ] Geen rode "out-of-date file"-melding
 - [ ] Eén stad getest: grafieken vullen zich, geen foutmelding

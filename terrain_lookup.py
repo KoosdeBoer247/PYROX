@@ -49,7 +49,7 @@ from __future__ import annotations
 
 # Module build stamp -- shown in the app sidebar so a stale file is
 # immediately identifiable instead of inferred from a traceback.
-__BUILD__ = "2026-08-06a"
+__BUILD__ = "2026-08-08c"
 
 # rasterio is OPTIONAL. It is needed only to read the remote ESA WorldCover
 # COGs for the per-segment terrain feature; every other part of the app

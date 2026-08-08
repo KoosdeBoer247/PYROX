@@ -51,8 +51,9 @@ from gpx_route import parse_gpx, route_summary, render_race_profile, route_map
 from loop_view import render_loop_view
 from evidence import render_evidence_panel
 from plain_view import render_plain_view
+from experimental_risk import render_experimental_section
 
-APP_BUILD = "2026-08-06a (runners + walker groups)"
+APP_BUILD = "2026-08-08c (elite excluded from HESTIA)"
 
 # -----------------------------------------------------------------------------
 # Athlete levels. Each maps to an existing PYROX group -- no new calibration is
@@ -162,6 +163,27 @@ def with_retry(fn, *args, max_attempts: int = 4, base_delay: float = 2.0, **kwar
 st.set_page_config(page_title="PYROX Participants", page_icon="\U0001F3C3", layout="wide")
 
 st.title("\U0001F3C3 PYROX \u2014 event participants")
+
+# Defensive fix for a known iOS Safari bug: Streamlit's sidebar scroll
+# container can "lock up" -- touch-scroll gestures stop registering --
+# especially once its content height changes dynamically, which happens
+# here whenever the level multiselects change. Scoped to touch devices only
+# via (hover: none) and (pointer: coarse), which is never true for a
+# mouse/trackpad -- so this never applies on Windows/Chrome or any other
+# desktop browser, avoiding any risk of interacting with Streamlit's own
+# desktop layout in ways not visually verifiable in this environment.
+st.markdown(
+    """<style>
+    @media (hover: none) and (pointer: coarse) {
+        [data-testid="stSidebar"] > div:first-child {
+            overflow-y: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+            height: 100vh !important;
+        }
+    }
+    </style>""",
+    unsafe_allow_html=True,
+)
 st.caption(
     "Heat risk for event participants — runners from beginner to elite, and "
     "walker groups including older adults and children. Race-day flags, "
@@ -285,33 +307,52 @@ with st.sidebar:
     selected_levels = selected_runners + selected_walkers
 
     st.divider()
-    st.markdown("**Pace** (min per km)")
-    paces = {}
-    for lvl in selected_levels:
-        is_walk = LEVELS[lvl]["mode"] == "walk"
-        paces[lvl] = st.number_input(
-            lvl, min_value=6.0 if is_walk else 2.5,
-            max_value=25.0 if is_walk else 12.0,
-            value=float(LEVELS[lvl]["pace"]), step=0.25 if is_walk else 0.05,
-            key=f"pace_{lvl}",
-            help=LEVELS[lvl]["note"] + " Pace sets the metabolic rate."
-                 + (" 12.0 min/km = 5 km/h." if is_walk else ""),
-        )
-
-    st.divider()
-    session_km = st.number_input(
-        "Session / race distance (km)", min_value=1.0, max_value=100.0,
-        value=10.0, step=1.0,
-        help="Sets how long each level is out on the course, and the daily "
-             "metabolic load for the multi-day view.",
-    )
-    use_nocturnal = st.checkbox(
-        "Include nocturnal recovery", value=False,
-        help="Warm nights reduce overnight recovery between sessions.",
-    )
     run_button = st.button("\U0001F680 Run analysis", type="primary",
                            use_container_width=True)
     st.caption(f"Build {APP_BUILD}")
+
+# =============================================================================
+# Pace & session settings — MAIN AREA, not sidebar.
+# =============================================================================
+# Deliberately not in the sidebar: with up to 12 levels selected, this is
+# 12+ number_input widgets stacked together, each with its own +/- stepper
+# buttons. On iOS Safari that combination is a known trigger for the
+# sidebar's scroll container "locking up" -- the stepper buttons' touch
+# handlers can swallow the scroll gesture, especially once the sidebar's
+# content height changes dynamically (which it does here, as levels are
+# added/removed). Moving these widgets to the main area, which scrolls
+# with the page rather than in a nested container, sidesteps the bug
+# entirely and is also just easier to use with a finger on a tablet.
+paces, session_km, use_nocturnal = {}, 10.0, False
+if selected_levels:
+    st.markdown("### \u2699\ufe0f Pace & session settings")
+    pace_cols = st.columns(3)
+    for i, lvl in enumerate(selected_levels):
+        is_walk = LEVELS[lvl]["mode"] == "walk"
+        with pace_cols[i % 3]:
+            paces[lvl] = st.number_input(
+                lvl, min_value=6.0 if is_walk else 2.5,
+                max_value=25.0 if is_walk else 12.0,
+                value=float(LEVELS[lvl]["pace"]), step=0.25 if is_walk else 0.05,
+                key=f"pace_{lvl}",
+                help=LEVELS[lvl]["note"] + " Pace sets the metabolic rate."
+                     + (" 12.0 min/km = 5 km/h." if is_walk else ""),
+            )
+
+    sc1, sc2 = st.columns([2, 1])
+    with sc1:
+        session_km = st.number_input(
+            "Session / race distance (km)", min_value=1.0, max_value=100.0,
+            value=10.0, step=1.0,
+            help="Sets how long each level is out on the course, and the "
+                 "daily metabolic load for the multi-day view.",
+        )
+    with sc2:
+        use_nocturnal = st.checkbox(
+            "Nocturnal recovery", value=False,
+            help="Warm nights reduce overnight recovery between sessions.",
+        )
+    st.divider()
 
 
 if "results" not in st.session_state:
@@ -576,6 +617,14 @@ if st.session_state.results and selected_levels:
     )
 
     render_plain_view(st, pyrox_result, label_for)
+
+    st.divider()
+    level_modes = {lvl: LEVELS[lvl]["mode"] for lvl in selected_levels}
+    render_experimental_section(
+        st, pyrox_result, label_for, forecast_df, level_modes,
+        exp_start, session_km, paces,
+        hestia_ctx={"lat": lat, "lon": lon, "tz_name": tz},
+    )
 
     with st.expander("Technical view — accumulated strain against thresholds"):
         st.plotly_chart(strain_chart(pyrox_result, label_for),

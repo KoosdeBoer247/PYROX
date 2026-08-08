@@ -49,7 +49,7 @@ from terrain_lookup import fetch_landcover_along_route, RASTERIO_AVAILABLE
 # terrain_lookup.py change. Shown in the sidebar so the running version is
 # visible at a glance -- guessing which code is deployed from a traceback
 # wastes far more time than displaying it.
-APP_BUILD = "2026-08-06a (athletics WBGT race flags)"
+APP_BUILD = "2026-08-08c (elite excluded from HESTIA)"
 from pyrox_revised_calibration import (
     apply_revised_calibration,
     default_met,
@@ -127,6 +127,28 @@ st.set_page_config(
 )
 
 st.title("\U0001F321\uFE0F PYROX")
+
+# Defensive fix for a known iOS Safari bug: Streamlit's sidebar scroll
+# container can "lock up" -- see app_athletes.py for the full explanation.
+st.markdown(
+    """<style>
+    /* Scoped to touch devices (iPad/mobile) only, via (hover: none) and
+    (pointer: coarse) -- neither is true for a mouse/trackpad on desktop, so
+    this never applies on Windows/Chrome or any other desktop browser. That
+    matters because height:100vh could in principle interact with
+    Streamlit's own desktop toolbar offset in ways not visually verifiable
+    in this environment; keeping the override touch-only avoids that risk
+    while still fixing the iOS scroll-lock bug it targets. */
+    @media (hover: none) and (pointer: coarse) {
+        [data-testid="stSidebar"] > div:first-child {
+            overflow-y: auto !important;
+            -webkit-overflow-scrolling: touch !important;
+            height: 100vh !important;
+        }
+    }
+    </style>""",
+    unsafe_allow_html=True,
+)
 st.caption(
     "Weather acquisition, thermal-index processing, and population-level "
     "heat-strain risk — forecast, hindcast, and custom historical periods."
