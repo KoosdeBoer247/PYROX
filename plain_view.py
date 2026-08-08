@@ -30,7 +30,7 @@ DESIGN CHOICES, AND WHY
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-08c"
+__BUILD__ = "2026-08-08e"
 
 import numpy as np
 import pandas as pd
@@ -56,6 +56,8 @@ _BANDS = [
 
 
 def band_for(reserve_pct: float):
+    if reserve_pct is None or (isinstance(reserve_pct, float) and np.isnan(reserve_pct)):
+        return "#9ca3af", "No data", "This day/group could not be computed from the available data."
     for threshold, colour, title, advice in _BANDS:
         if reserve_pct >= threshold:
             return colour, title, advice
@@ -65,9 +67,11 @@ def band_for(reserve_pct: float):
 def _battery_svg(pct: float, colour: str, width: int = 220, height: int = 46) -> str:
     """A horizontal battery drawn as inline SVG, so it renders identically
     everywhere without a plotting round-trip."""
-    pct = float(np.clip(pct, 0.0, 100.0))
+    is_valid = pct is not None and not (isinstance(pct, float) and np.isnan(pct))
+    pct_clamped = float(np.clip(pct, 0.0, 100.0)) if is_valid else 0.0
     body_w = width - 14
-    fill_w = max(2.0, (body_w - 8) * pct / 100.0)
+    fill_w = max(2.0, (body_w - 8) * pct_clamped / 100.0) if is_valid else 2.0
+    label = f"{pct_clamped:.0f}%" if is_valid else "N/A"
     return f"""
 <svg width="{width}" height="{height}" viewBox="0 0 {width} {height}">
   <rect x="1" y="6" rx="6" ry="6" width="{body_w}" height="{height-12}"
@@ -76,7 +80,7 @@ def _battery_svg(pct: float, colour: str, width: int = 220, height: int = 46) ->
   <rect x="5" y="10" rx="3" ry="3" width="{fill_w}" height="{height-20}" fill="{colour}"/>
   <text x="{body_w/2}" y="{height/2+6}" text-anchor="middle"
         font-family="system-ui, sans-serif" font-size="17" font-weight="700"
-        fill="#0f172a">{pct:.0f}%</text>
+        fill="#0f172a">{label}</text>
 </svg>"""
 
 
@@ -116,7 +120,26 @@ def render_status_cards(st, pyrox_result: dict, label_for: dict,
         reserve = reserve_series(res)
         if len(reserve) == 0:
             continue
-        idx = int(np.argmin(reserve)) if day_index is None else min(day_index, len(reserve) - 1)
+        if day_index is not None:
+            idx = min(day_index, len(reserve) - 1)
+        elif np.all(np.isnan(reserve)):
+            # Every day is NaN for this group -- nanargmin would raise.
+            # Show it honestly as "no data" rather than picking an
+            # arbitrary index and rendering something plausible-looking.
+            st.markdown(
+                status_card_html(label_for.get(name, name), float("nan"),
+                                 subtitle="no valid data in this period"),
+                unsafe_allow_html=True,
+            )
+            continue
+        else:
+            # np.argmin on an array containing NaN returns the NaN's own
+            # index, not the true minimum among valid values (NaN
+            # comparisons are always False, so it "wins" the internal
+            # scan). That silently turned one bad data point into every
+            # group showing "nan% / Empty / urgent". np.nanargmin skips
+            # NaN correctly.
+            idx = int(np.nanargmin(reserve))
         when = pd.Timestamp(dates[idx]).strftime("%a %d %b") if idx < len(dates) else ""
         st.markdown(
             status_card_html(label_for.get(name, name), reserve[idx],
@@ -137,15 +160,35 @@ def battery_timeline_chart(pyrox_result: dict, label_for: dict):
         rows=len(groups), cols=1, shared_xaxes=True, vertical_spacing=0.06,
         subplot_titles=[label_for.get(n, n) for n, _ in groups],
     )
+    any_missing_data = False
     for r, (name, res) in enumerate(groups, start=1):
         y = reserve_series(res)
         n = min(len(dates), len(y))
+        x_vals, y_vals = dates[:n], y[:n]
         fig.add_trace(go.Scatter(
-            x=dates[:n], y=y[:n], mode="lines", fill="tozeroy",
+            x=x_vals, y=y_vals, mode="lines", fill="tozeroy",
             line=dict(color="#0f172a", width=2), fillcolor="rgba(59,130,246,0.25)",
             name=label_for.get(name, name), showlegend=False,
             hovertemplate="%{x|%a %d %b}<br>reserve %{y:.0f}%<extra></extra>",
+            connectgaps=False,  # NaN must show as a real gap, never bridged silently
         ), row=r, col=1)
+
+        # A gap (NaN anywhere in this group's series) is made visible rather
+        # than left as an unexplained blank area -- the earlier "nan% /
+        # Empty / urgent" battery-card bug happened precisely because a gap
+        # like this was invisible until it got misread downstream.
+        is_nan = pd.isna(y_vals) if isinstance(y_vals, np.ndarray) else np.isnan(y_vals)
+        if np.any(is_nan):
+            any_missing_data = True
+            first_gap = x_vals[int(np.argmax(is_nan))]
+            fig.add_vrect(x0=first_gap, x1=x_vals[-1], line_width=0,
+                         fillcolor="rgba(148,163,184,0.35)", row=r, col=1)
+            fig.add_annotation(
+                x=first_gap, y=50, row=r, col=1, text="no data",
+                showarrow=False, font=dict(size=10, color="#475569"),
+                bgcolor="rgba(255,255,255,0.8)",
+            )
+
         for y0, y1, colour in [(0, 25, "rgba(220,38,38,0.13)"),
                                (25, 50, "rgba(234,179,8,0.13)")]:
             fig.add_hrect(y0=y0, y1=y1, line_width=0, fillcolor=colour,
@@ -160,6 +203,7 @@ def battery_timeline_chart(pyrox_result: dict, label_for: dict):
                    x=0, xanchor="left", y=0.99, yanchor="top"),
         hovermode="x unified",
     )
+    fig._pyrox_any_missing_data = any_missing_data
     for ann in fig.layout.annotations:
         ann.font.size = 12
     return fig
@@ -170,8 +214,15 @@ def render_plain_view(st, pyrox_result: dict, label_for: dict) -> None:
     render_status_cards(st, pyrox_result, label_for)
 
     with st.expander("Show how the reserve changes day by day"):
-        st.plotly_chart(battery_timeline_chart(pyrox_result, label_for),
-                        use_container_width=True, key="plain_battery_timeline")
+        fig = battery_timeline_chart(pyrox_result, label_for)
+        st.plotly_chart(fig, use_container_width=True, key="plain_battery_timeline")
+        if getattr(fig, "_pyrox_any_missing_data", False):
+            st.warning(
+                "\u26a0\ufe0f The grey band(s) above mark days with no usable "
+                "data for that group \u2014 most likely a gap in the underlying "
+                "weather fetch. Treat those days as unknown, not as zero "
+                "risk, and try re-running the analysis."
+            )
         st.caption(
             "Each band is one group. The line falls when heat outpaces what "
             "the body can shed and rises when there is time to recover. "

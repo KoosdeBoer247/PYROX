@@ -13,7 +13,7 @@ Also holds the pace -> metabolic rate conversion used by the athlete app.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-08c"
+__BUILD__ = "2026-08-08e"
 
 import io
 import tempfile
@@ -197,6 +197,25 @@ def run_pyrox(excel_blob: bytes, group_names: tuple, forecast_days_used: int,
         apparent_temperature(row.t_air_max, row.rh_mean, row.wind_mean)
         for row in combined.itertuples()
     ]
+
+    # Defensive NaN guard. Not tied to a confirmed root cause -- isolated
+    # testing could not reproduce NaN reaching this point through the
+    # normal path -- but if a weather fetch ever leaves a gap here,
+    # Python's max(0.0, nan) == 0.0 would silently turn a missing value
+    # into a false "perfectly calm day" rather than surfacing it. Linear
+    # interpolation (falling back to a neighbour, then to the series mean
+    # if a whole run is somehow NaN) keeps a bad day from silently
+    # vanishing into a 0-load reading.
+    def _fill_nan(seq):
+        s = pd.Series(seq, dtype=float)
+        if s.isna().any():
+            s = s.interpolate(limit_direction="both")
+            if s.isna().any():  # entire series was NaN
+                s = s.fillna(HEAT_LOAD_REFERENCE_TEMP)
+        return s.tolist()
+
+    heat_loads = _fill_nan(heat_loads)
+    apparent = _fill_nan(apparent)
 
     def loads_for_met(met: float):
         if met is None or abs(met - MET_REFERENCE) < 1e-9:

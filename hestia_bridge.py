@@ -38,7 +38,7 @@ TWO FIXES CARRIED BY THIS BRIDGE (not by hestia_model.py's callers):
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-08c"
+__BUILD__ = "2026-08-08e"
 
 import multiprocessing
 import time

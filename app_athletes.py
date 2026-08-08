@@ -53,7 +53,7 @@ from evidence import render_evidence_panel
 from plain_view import render_plain_view
 from experimental_risk import render_experimental_section
 
-APP_BUILD = "2026-08-08c (elite excluded from HESTIA)"
+APP_BUILD = "2026-08-08e (NaN gaps now visible in timeline chart)"
 
 # -----------------------------------------------------------------------------
 # Athlete levels. Each maps to an existing PYROX group -- no new calibration is
