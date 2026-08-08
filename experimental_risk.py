@@ -320,12 +320,17 @@ def render_experimental_section(st, pyrox_result: dict, label_for: dict,
         st.info(
             "Unlike the two indicators above (which use published but "
             "general-purpose models), this runs the author's own HESTIA "
-            "individual tier \u2014 the model with actual event-hindcast "
-            "validation (Falmouth, Dam tot Damloop, IRONMAN Hoorn; see the "
-            "evidence panel). A quick estimate (small sample) runs "
-            "automatically below; full precision (n=5000) is available on "
-            "request and can take several minutes \u2014 it is never triggered "
-            "automatically."
+            "individual tier \u2014 the model with a history of event-hindcast "
+            "comparison (Falmouth, Dam tot Damloop, IRONMAN Hoorn; see the "
+            "evidence panel). \u26a0\ufe0f **The current calibration is "
+            "self-labelled PROVISIONAL in the model's own source code**: "
+            "re-fit at a reduced N=200 (not production scale) after a "
+            "July 2026 rebuild of the cardiovascular module, pending "
+            "production-scale reconfirmation. Treat outputs as directional "
+            "research estimates, not settled probabilities. A quick "
+            "estimate (small sample) runs automatically below; full "
+            "precision (n=5000) is available on request and can take "
+            "several minutes \u2014 it is never triggered automatically."
         )
         lat, lon, tz_name = hestia_ctx["lat"], hestia_ctx["lon"], hestia_ctx["tz_name"]
         excluded_any = False

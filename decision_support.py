@@ -40,7 +40,7 @@ from __future__ import annotations
 
 # Module build stamp -- shown in the app sidebar so a stale file is
 # immediately identifiable instead of inferred from a traceback.
-__BUILD__ = "2026-08-08f"
+__BUILD__ = "2026-08-08i"
 
 from itertools import groupby
 from functools import lru_cache
@@ -343,6 +343,73 @@ def flag_display_name(status: str) -> str:
         if s == status:
             return name
     return "No data"
+
+
+def worst_flag(exposure: dict) -> str:
+    """The worst athletics-flag status reached, from an exposure_by_flag()
+    result. None if the dict is empty."""
+    order = ["race_green", "race_yellow", "race_red", "race_black"]
+    present = [s for s in order if exposure.get(s, 0) > 0]
+    return present[-1] if present else None
+
+
+def render_flag_reserve_crosscheck(st, per_level_exposure: dict, pyrox_result: dict,
+                                    label_for: dict, exp_date, session_hours: dict,
+                                    daily_met: dict) -> None:
+    """Explain, in place, when the same-day WBGT flag and PYROX's
+    multi-day reserve disagree for the chosen race date -- rather than
+    leaving 'High risk' next to '100% reserve, coping' with no visible
+    reason, which reads as a contradiction (it is not one: the two answer
+    different questions, at different timescales -- see below).
+    """
+    from loop_view import reserve_series
+
+    rows = []
+    for name, res in pyrox_result["groups"].items():
+        level_label = label_for.get(name, name)
+        exposure = per_level_exposure.get(level_label)
+        if exposure is None:
+            continue
+        flag = worst_flag(exposure)
+        if flag not in ("race_red", "race_black"):
+            continue  # only worth explaining when the flag says something serious
+
+        dates = pyrox_result["dates"]
+        target = pd.Timestamp(exp_date).date()
+        matches = [i for i, d in enumerate(dates) if pd.Timestamp(d).date() == target]
+        if not matches:
+            continue
+        reserve_pct = reserve_series(res)[matches[0]]
+        if reserve_pct < 75:
+            continue  # they already agree -- nothing to explain
+
+        rows.append((level_label, flag_display_name(flag), reserve_pct,
+                    session_hours.get(level_label), daily_met.get(level_label)))
+
+    if not rows:
+        return
+
+    st.warning(
+        "\u26a0\ufe0f **Why does the flag above say high risk while the reserve "
+        "below says 'plenty in reserve', for the same day?** They answer "
+        "different questions, at different timescales:\n\n"
+        "- The flag is the **ambient WBGT right now** \u2014 it doesn't know "
+        "or care how long you're exposed to it.\n"
+        "- The reserve is PYROX's **multi-day** cumulative model, which "
+        "weights a runner's metabolic heat to a full working shift "
+        "(\u2248 8 hours). A 1\u20132 hour race gets diluted almost to nothing "
+        "by that weighting \u2014 it was built for people out in the heat "
+        "most of the day, not a single race.\n\n"
+        "**Trust the flag for same-day pacing and start-time decisions. "
+        "Trust the reserve only for multi-day load** (training block into "
+        "race day), not as a verdict on the race itself."
+    )
+    for level_label, flag_name, reserve_pct, hrs, met in rows:
+        st.caption(
+            f"**{level_label}**: {flag_name} flag, but {reserve_pct:.0f}% "
+            f"reserve on this date \u2014 {hrs:.2f}h on course diluted to an "
+            f"effective {met:.1f} MET against the 8h reference."
+        )
 
 
 def flag_colour(status: str) -> str:

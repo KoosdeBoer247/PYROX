@@ -3217,7 +3217,30 @@ def calculate_indices_jos3_adult(interp_data, lat, lon, met_value, clo_value,
     t_rect_finish    = results[-1]['t_rect']
     co_reserve_finish = results[-1].get('co_reserve', 2.0)
     if np.isnan(co_reserve_finish):
-        co_reserve_finish = 2.0   # fallback if CVR not available
+        # [app fix, documented] The CVR-linked series (jos3_cvr_series) can
+        # end before the full race duration -- observed directly: a 100-min
+        # simulation with co_reserve populated for steps 1-4 only, NaN for
+        # steps 5-9, with t_rect frozen at its step-4 value for the
+        # remainder (the signature of the per-step loop halting rather than
+        # genuinely converging). The ORIGINAL fallback here was a hardcoded
+        # 2.0 ("healthy") regardless of what happened during the race --
+        # which, for a participant whose last VALID co_reserve was already
+        # negative (observed: -0.2), silently overwrites a collapse state
+        # with an assumed-healthy one before propagating into
+        # simulate_post_finish(). Any 'percent of participants reaching
+        # zero/negative capacity during or after the race' statistic
+        # computed from co_reserve_postfinish would then systematically
+        # undercount exactly the participants most at risk.
+        #
+        # Fix: fall back to the last VALID (non-NaN) co_reserve observed
+        # during the race, not a constant. This carries forward whatever
+        # state the participant was actually last known to be in --
+        # including a negative one -- rather than assuming health. If no
+        # valid value exists at all (CVR never linked for this draw), the
+        # constant 2.0 remains the final fallback, unchanged from before.
+        valid_prior = [r.get('co_reserve') for r in results[:-1]
+                       if r.get('co_reserve') is not None and not np.isnan(r.get('co_reserve'))]
+        co_reserve_finish = valid_prior[-1] if valid_prior else 2.0
     wbgt_finish       = results[-1]['wbgt']
     auc_klinisch_race = results[-1]['auc_klinisch']
     # [2026-07] CO_max at finish, for the absolute-magnitude pooling formula

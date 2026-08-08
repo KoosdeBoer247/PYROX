@@ -13,7 +13,7 @@ Also holds the pace -> metabolic rate conversion used by the athlete app.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-08f"
+__BUILD__ = "2026-08-08i"
 
 import io
 import tempfile

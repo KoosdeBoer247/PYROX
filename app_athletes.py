@@ -46,6 +46,7 @@ from pyrox_revised_calibration import K_PER_MET, MET_REFERENCE, onset_temperatur
 from decision_support import (
     render_hourly_safety_panel, relative_risk_text,
     exposure_by_flag, flag_display_name, flag_colour,
+    render_flag_reserve_crosscheck,
 )
 from gpx_route import parse_gpx, route_summary, render_race_profile, route_map
 from loop_view import render_loop_view
@@ -53,7 +54,7 @@ from evidence import render_evidence_panel
 from plain_view import render_plain_view
 from experimental_risk import render_experimental_section
 
-APP_BUILD = "2026-08-08f (reserve cards scoped to chosen date)"
+APP_BUILD = "2026-08-08i (true conjunctive EHS criterion)"
 
 # -----------------------------------------------------------------------------
 # Athlete levels. Each maps to an existing PYROX group -- no new calibration is
@@ -617,6 +618,10 @@ if st.session_state.results and selected_levels:
     )
 
     render_plain_view(st, pyrox_result, label_for, target_date=exp_date)
+    render_flag_reserve_crosscheck(
+        st, per_level_exposure, pyrox_result, label_for, exp_date,
+        session_hours, daily_met,
+    )
 
     st.divider()
     level_modes = {lvl: LEVELS[lvl]["mode"] for lvl in selected_levels}

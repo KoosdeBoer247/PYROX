@@ -38,7 +38,7 @@ TWO FIXES CARRIED BY THIS BRIDGE (not by hestia_model.py's callers):
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-08f"
+__BUILD__ = "2026-08-08i"
 
 import multiprocessing
 import time
@@ -168,6 +168,95 @@ def _patch_air_quality(aqi_value: int):
 # =============================================================================
 # The run itself
 # =============================================================================
+def _summarize_results(all_results: list) -> dict:
+    """Population statistics from a list of per-draw simulation results.
+    Shared by _cached_quick_run and run_full_precision so the two paths
+    can never compute these differently by accident.
+    """
+    t_rect_sims = np.array([[r["t_rect"] for r in res] for res in all_results])
+    peak_t_rect = np.nanmax(t_rect_sims, axis=1)
+
+    # "first_aid_visit" (per hestia_model.py, line ~3178) is a broad,
+    # deliberately over-inclusive OR-based screening trigger --
+    # (t_rect>=40.5) OR (water_loss_pct>=2.0) OR (rpe_total>=17) -- NOT a
+    # calibrated probability of an actual medical incident. 2% dehydration
+    # or RPE>=17 are common in a hard effort, which is why this legitimately
+    # fires for a large fraction of a simulated field; it answers "worth
+    # keeping an eye on", not "will need first aid". The real, calibrated
+    # DtD 2024 first-aid rate (150/35,000 = 0.43%) is a completely
+    # different, much narrower quantity -- see the caption where this is
+    # displayed for that contrast, so the gap between the two doesn't read
+    # as a broken model.
+    first_aid = np.array([res[-1].get("first_aid_visit", False) for res in all_results])
+
+    # T_rect >= 40.5 ALONE is deliberately NOT reported as an EHS estimate.
+    # Veltmeijer's own findings, and the author's own conjunctive
+    # hypothesis, are that T_rect elevation alone is not sufficient --
+    # EHS requires T_rect>40.5 AND CO_reserve<=0 SIMULTANEOUSLY. The
+    # model's own simulate_post_finish() already implements exactly this
+    # conjunction, but ONLY for the 10-minute post-finish window
+    # (hestia_model.py's own ehs_postfinish flag) -- it was never checked
+    # DURING the race itself. Built here: the true conjunction, checked at
+    # every timestep during the race (using the already-available per-step
+    # t_rect/co_reserve arrays) and combined with the existing post-finish
+    # flag, so a runner who meets both conditions simultaneously at any
+    # point -- mid-race or shortly after -- is counted, and one who merely
+    # has a high T_rect with intact cardiovascular reserve is not.
+    true_ehs = []
+    for res in all_results:
+        during_race = any(
+            (r.get("t_rect") is not None and r.get("co_reserve") is not None
+             and not np.isnan(r.get("t_rect")) and not np.isnan(r.get("co_reserve"))
+             and r["t_rect"] >= 40.5 and r["co_reserve"] <= 0)
+            for r in res
+        )
+        post_finish = bool(res[-1].get("ehs_postfinish", False))
+        true_ehs.append(during_race or post_finish)
+    true_ehs = np.array(true_ehs)
+
+    # CO_reserve: "how much capacity is lost during and shortly after the
+    # race", and "% reaching zero/negative capacity". Baseline = first
+    # valid (non-NaN) co_reserve observed during the race for that draw
+    # (co_reserve is NaN at t=0 by construction). Worst point = the
+    # minimum across BOTH the race trajectory AND the full post-finish
+    # series (co_reserve_series_postfinish), not just the single
+    # 10-minute post-finish endpoint -- the post-finish module documents
+    # a validated acute dip that can occur and recover within that
+    # window, which an endpoint-only read would miss entirely.
+    baseline_co, worst_co = [], []
+    for res in all_results:
+        race_vals = [r.get("co_reserve") for r in res
+                    if r.get("co_reserve") is not None and not np.isnan(r.get("co_reserve"))]
+        pf_series = res[-1].get("co_reserve_series_postfinish") or []
+        pf_vals = [v for v in pf_series if v is not None and not np.isnan(v)]
+        baseline_co.append(race_vals[0] if race_vals else np.nan)
+        combined = race_vals + pf_vals
+        worst_co.append(min(combined) if combined else np.nan)
+    baseline_co = np.array(baseline_co, dtype=float)
+    worst_co = np.array(worst_co, dtype=float)
+
+    valid = ~np.isnan(baseline_co) & ~np.isnan(worst_co) & (baseline_co > 0)
+    pct_reserve_remaining = np.full(len(baseline_co), np.nan)
+    pct_reserve_remaining[valid] = 100.0 * np.clip(worst_co[valid] / baseline_co[valid], 0.0, 1.0)
+    pct_zero_or_negative = float(100 * np.mean(worst_co[~np.isnan(worst_co)] <= 0)) \
+        if np.any(~np.isnan(worst_co)) else float("nan")
+
+    return {
+        "peak_t_rect_mean": float(np.nanmean(peak_t_rect)),
+        "peak_t_rect_p95": float(np.nanpercentile(peak_t_rect, 95)),
+        "peak_t_rect_max": float(np.nanmax(peak_t_rect)),
+        "pct_true_ehs_criterion": float(100 * np.mean(true_ehs)),
+        "pct_first_aid": float(100 * np.mean(first_aid)),
+        "pct_ehs_postfinish": float(100 * np.mean(
+            [bool(res[-1].get("ehs_postfinish", False)) for res in all_results])),
+        "peak_t_rect_all": peak_t_rect.tolist(),
+        "pct_reserve_remaining_mean": float(np.nanmean(pct_reserve_remaining)),
+        "pct_reserve_remaining_median": float(np.nanmedian(pct_reserve_remaining)),
+        "pct_zero_or_negative_capacity": pct_zero_or_negative,
+        "n_with_valid_co_reserve": int(np.sum(valid)),
+    }
+
+
 @st.cache_data(ttl=60 * 60 * 2, show_spinner=False)
 def _cached_quick_run(interp_data_key: tuple, lat: float, lon: float, tz_name: str,
                       met_value: float, clo_value: float, training_factor: float,
@@ -203,25 +292,13 @@ def _cached_quick_run(interp_data_key: tuple, lat: float, lon: float, tz_name: s
     if stats is None:
         return None
 
-    t_rect_sims = np.array([[r["t_rect"] for r in res] for res in all_results])
-    peak_t_rect = np.nanmax(t_rect_sims, axis=1)
-    first_aid = np.array([res[-1].get("first_aid_visit", False) for res in all_results])
-    ehs_pf = np.array([res[-1].get("ehs_postfinish", False) for res in all_results])
-
+    summary = _summarize_results(all_results)
     return {
         "n": len(all_results),
         "workers": workers,
         "elapsed_s": elapsed,
-        "peak_t_rect_mean": float(np.nanmean(peak_t_rect)),
-        "peak_t_rect_p95": float(np.nanpercentile(peak_t_rect, 95)),
-        "peak_t_rect_max": float(np.nanmax(peak_t_rect)),
-        "pct_exceed_40_5": float(100 * np.mean(peak_t_rect >= 40.5)),
-        "pct_exceed_40_0": float(100 * np.mean(peak_t_rect >= 40.0)),
-        "pct_exceed_39_5": float(100 * np.mean(peak_t_rect >= 39.5)),
-        "pct_first_aid": float(100 * np.mean(first_aid)),
-        "pct_ehs_postfinish": float(100 * np.mean(ehs_pf)),
-        "peak_t_rect_all": peak_t_rect.tolist(),
         "aqi_used": aqi,
+        **summary,
     }
 
 
@@ -293,23 +370,11 @@ def run_full_precision(weather_df, lat, lon, tz_name, start, finish, met_value,
     if progress_callback:
         progress_callback(len(worker_args), len(worker_args))
 
-    t_rect_sims = np.array([[r["t_rect"] for r in res] for res in all_results])
-    peak_t_rect = np.nanmax(t_rect_sims, axis=1)
-    first_aid = np.array([res[-1].get("first_aid_visit", False) for res in all_results])
-    ehs_pf = np.array([res[-1].get("ehs_postfinish", False) for res in all_results])
-
+    summary = _summarize_results(all_results)
     return {
         "n": len(all_results), "workers": workers, "elapsed_s": elapsed,
-        "peak_t_rect_mean": float(np.nanmean(peak_t_rect)),
-        "peak_t_rect_p95": float(np.nanpercentile(peak_t_rect, 95)),
-        "peak_t_rect_max": float(np.nanmax(peak_t_rect)),
-        "pct_exceed_40_5": float(100 * np.mean(peak_t_rect >= 40.5)),
-        "pct_exceed_40_0": float(100 * np.mean(peak_t_rect >= 40.0)),
-        "pct_exceed_39_5": float(100 * np.mean(peak_t_rect >= 39.5)),
-        "pct_first_aid": float(100 * np.mean(first_aid)),
-        "pct_ehs_postfinish": float(100 * np.mean(ehs_pf)),
-        "peak_t_rect_all": peak_t_rect.tolist(),
         "aqi_used": aqi,
+        **summary,
     }
 
 
@@ -335,8 +400,54 @@ def render_hestia_section(st_module, weather_df: pd.DataFrame, lat: float, lon: 
 
     c1, c2, c3 = st_module.columns(3)
     c1.metric("Peak T_re, mean", f"{quick['peak_t_rect_mean']:.1f}\u00b0C")
-    c2.metric(f"\u2265 40.5\u00b0C (EHS ref.)", f"{quick['pct_exceed_40_5']:.1f}%")
-    c3.metric("Flagged for first aid", f"{quick['pct_first_aid']:.1f}%")
+    c2.metric("True EHS criterion met", f"{quick['pct_true_ehs_criterion']:.1f}%",
+             help="T_rect >= 40.5\u00b0C AND CO_reserve <= 0, SIMULTANEOUSLY, "
+                  "at any point during the race or in the 10-min post-finish "
+                  "window \u2014 the author's own conjunctive hypothesis. "
+                  "T_rect alone is deliberately NOT reported as an EHS risk: "
+                  "Veltmeijer's own findings, and this hypothesis itself, "
+                  "hold that elevated T_rect without cardiovascular "
+                  "decompensation is not sufficient for harm.")
+    c3.metric("Worth monitoring (broad screen)", f"{quick['pct_first_aid']:.1f}%",
+             help="T_rect>=40.5 OR dehydration>=2% OR RPE>=17, at any point "
+                  "\u2014 a deliberately broad, over-inclusive screening flag "
+                  "(hestia_model.py), NOT a calibrated medical-incident rate. "
+                  "For contrast: DtD 2024's own observed first-aid rate was "
+                  "150/35,000 = 0.43%, a much narrower real-world quantity.")
+
+    d1, d2 = st_module.columns(2)
+    reserve_left = quick.get("pct_reserve_remaining_mean")
+    zero_or_neg = quick.get("pct_zero_or_negative_capacity")
+    if reserve_left is not None and not np.isnan(reserve_left):
+        d1.metric("Avg. cardiovascular capacity remaining",
+                  f"{reserve_left:.0f}%",
+                  delta=f"-{100 - reserve_left:.0f}pp lost", delta_color="inverse")
+    if zero_or_neg is not None and not np.isnan(zero_or_neg):
+        d2.metric("Reached zero/negative capacity",
+                  f"{zero_or_neg:.1f}%",
+                  help="Share of the simulated group whose cardiac-output "
+                       "reserve reached zero or below, at any point during "
+                       "the race or in the 10 minutes after finishing.")
+    st_module.caption(
+        "\u2139\ufe0f **PROVISIONAL calibration** \u2014 the intercepts behind "
+        "HESTIA's incident-rate translation are self-labelled 'PROVISIONAL' "
+        "in the model's own source (reduced N=200 feasibility fit, not "
+        "production-scale; recalibrated after a July 2026 cardiovascular-"
+        "module rebuild). Treat these numbers as directional, not as "
+        "settled probabilities, until re-run at production scale."
+    )
+    st_module.caption(
+        "\u2139\ufe0f The middle two figures answer 'how much capacity does "
+        "an average runner lose during and shortly after the race' and "
+        "'what share reach zero or negative capacity' \u2014 using HESTIA's "
+        "own cardiac-output-reserve (Lloyd et al. 2022), evaluated at the "
+        "actual race timescale (minute-by-minute through the race plus "
+        "the 10-minute post-finish window), not PYROX's multi-day model. "
+        f"Based on {quick.get('n_with_valid_co_reserve', '?')} of "
+        f"{quick['n']} simulated participants with a usable CO_reserve "
+        "trajectory."
+    )
+
     st_module.caption(
         f"Quick estimate, n={quick['n']} (of the app's own simulated population, "
         f"not real participants), {quick['elapsed_s']:.1f}s on {quick['workers']} "
@@ -363,10 +474,29 @@ def render_hestia_section(st_module, weather_df: pd.DataFrame, lat: float, lon: 
             f1, f2, f3 = st_module.columns(3)
             f1.metric("Peak T_re, mean", f"{full['peak_t_rect_mean']:.1f}\u00b0C",
                       delta=f"{full['peak_t_rect_mean']-quick['peak_t_rect_mean']:+.1f} vs quick")
-            f2.metric(f"\u2265 40.5\u00b0C (EHS ref.)", f"{full['pct_exceed_40_5']:.1f}%",
-                      delta=f"{full['pct_exceed_40_5']-quick['pct_exceed_40_5']:+.1f}pp vs quick")
-            f3.metric("Flagged for first aid", f"{full['pct_first_aid']:.1f}%",
-                      delta=f"{full['pct_first_aid']-quick['pct_first_aid']:+.1f}pp vs quick")
+            f2.metric("True EHS criterion met", f"{full['pct_true_ehs_criterion']:.1f}%",
+                      delta=f"{full['pct_true_ehs_criterion']-quick['pct_true_ehs_criterion']:+.1f}pp vs quick",
+                      help="T_rect>=40.5\u00b0C AND CO_reserve<=0, simultaneously.")
+            f3.metric("Worth monitoring (broad screen)", f"{full['pct_first_aid']:.1f}%",
+                      delta=f"{full['pct_first_aid']-quick['pct_first_aid']:+.1f}pp vs quick",
+                      help="Broad OR-based screen, not a calibrated incident rate.")
+
+            g1, g2 = st_module.columns(2)
+            full_reserve = full.get("pct_reserve_remaining_mean")
+            quick_reserve = quick.get("pct_reserve_remaining_mean")
+            full_zeroneg = full.get("pct_zero_or_negative_capacity")
+            quick_zeroneg = quick.get("pct_zero_or_negative_capacity")
+            if full_reserve is not None and not np.isnan(full_reserve):
+                delta_r = (f"{full_reserve - quick_reserve:+.0f}pp vs quick"
+                          if quick_reserve is not None and not np.isnan(quick_reserve) else None)
+                g1.metric("Avg. cardiovascular capacity remaining",
+                         f"{full_reserve:.0f}%", delta=delta_r, delta_color="inverse")
+            if full_zeroneg is not None and not np.isnan(full_zeroneg):
+                delta_z = (f"{full_zeroneg - quick_zeroneg:+.1f}pp vs quick"
+                          if quick_zeroneg is not None and not np.isnan(quick_zeroneg) else None)
+                g2.metric("Reached zero/negative capacity",
+                         f"{full_zeroneg:.1f}%", delta=delta_z)
+
             st_module.caption(
                 f"Full precision, n={full['n']}, {full['elapsed_s']:.1f}s on "
                 f"{full['workers']} worker(s)."
