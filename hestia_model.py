@@ -3081,9 +3081,42 @@ def calculate_indices_jos3_adult(interp_data, lat, lon, met_value, clo_value,
             bsa                     = float(np.mean(jos3_model.bsa))
             water_loss_rate_g_per_s = (metabolic_heat_flux * bsa * evap_fraction) / 2418.0
 
+        # [fix, 2026-08-09] Moved ahead of the CVR block below (was after
+        # it). This is the model's own correctly-implemented ad-libitum
+        # drinking simulation (thirst_threshold, random 120-180g intake
+        # per drink) -- it needs to run BEFORE the CVR snapshot is built
+        # for this timestep, not after, so the CVR module sees a
+        # drinking-corrected value for THIS step rather than being fed a
+        # separate, never-decremented accumulator (cvr_water_loss_kg) that
+        # was silently assuming zero fluid intake for the entire event.
+        # See the investigation note in HESTIA_CVR_Module_v2.py above
+        # CVRModel for the full diagnosis: CO_demand stayed flat but
+        # CO_max eroded steadily over a 2h test at a mild, CONSTANT 22degC
+        # (no heat escalation at all) purely because the old
+        # cvr_water_loss_kg kept climbing with no drinking ever applied,
+        # while dehydration_pct's actual values were modest/realistic --
+        # the bug was the missing rehydration, not the dehydration model.
+        sweat_rate     = water_loss_rate_g_per_s * 60.0 * sweat_factor
+        water_loss     = sweat_rate * time_steps_minutes[i] if i > 0 else 0
+        cumulative_water_loss += water_loss
+        water_loss_pct = (cumulative_water_loss / 1000) / weight * 100
+        is_thirsty     = water_loss_pct >= thirst_threshold
+
+        if is_thirsty and can_drink_again:
+            cumulative_water_loss = max(0, cumulative_water_loss - np.random.uniform(120, 180))
+            can_drink_again       = False
+        if not is_thirsty:
+            can_drink_again = True
+
         if CVR_AVAILABLE and i > 0:
-            dt_s = time_steps_minutes[i] * 60.0
-            cvr_water_loss_kg += water_loss_rate_g_per_s * sweat_factor * dt_s / 1000.0
+            # [fix, 2026-08-09] Was: cvr_water_loss_kg += ... (a pure,
+            # never-decremented accumulator). Now: reuse
+            # cumulative_water_loss, which already has drinking correctly
+            # subtracted above, converted g -> kg to match this variable's
+            # expected unit (see its other call site,
+            # `dehydration_kg_finish = cvr_water_loss_kg`, which is
+            # unchanged and now automatically gets the corrected value too).
+            cvr_water_loss_kg = cumulative_water_loss / 1000.0
 
             co_lh = float(np.array(results_jos3['cardiac_output']).flat[-1]) \
                 if 'cardiac_output' in results_jos3 else 900.0
@@ -3126,18 +3159,6 @@ def calculate_indices_jos3_adult(interp_data, lat, lon, met_value, clo_value,
             # pass, so this cannot drift from the officially reported
             # CO_reserve (same precision, just also evaluated in-step).
             prev_co_reserve_live = cvr_model_live.compute_step(jos3_snapshot_this_step).CO_reserve
-
-        sweat_rate     = water_loss_rate_g_per_s * 60.0 * sweat_factor
-        water_loss     = sweat_rate * time_steps_minutes[i] if i > 0 else 0
-        cumulative_water_loss += water_loss
-        water_loss_pct = (cumulative_water_loss / 1000) / weight * 100
-        is_thirsty     = water_loss_pct >= thirst_threshold
-
-        if is_thirsty and can_drink_again:
-            cumulative_water_loss = max(0, cumulative_water_loss - np.random.uniform(120, 180))
-            can_drink_again       = False
-        if not is_thirsty:
-            can_drink_again = True
 
         if utcis_pre[i] is not None:
             utci_val = utcis_pre[i]

@@ -164,6 +164,35 @@ class CVRTimeSeries:
 # CVR MODEL
 # ─────────────────────────────────────────────────────────────────────────────
 
+# [INVESTIGATION NOTE, 2026-08-09, superseded -- see hestia_model.py's
+# calculate_indices_jos3_adult() near "cvr_water_loss_kg" for the real fix]
+#
+# An initial hypothesis here proposed capping dehydration_pct's
+# contribution to CHSI at a fixed ceiling, to stop a duration-driven
+# CO_reserve decline that persisted even at a mild, constant 22degC (no
+# heat escalation at all) and even after T_core had plateaued. That
+# hypothesis was WRONG: the dehydration_pct values themselves were modest
+# and realistic (1.64% after 2h, well within normal sweat-loss ranges) --
+# capping them would have masked the real problem rather than fixed it.
+#
+# The actual root cause: this module's dehydration input
+# (weight_loss_g_s, fed from hestia_model.py's `cvr_water_loss_kg`) is a
+# PURE ACCUMULATOR with no drinking/rehydration subtracted from it, ever
+# -- as if the simulated runner drinks nothing for the entire event. A
+# SEPARATE, parallel variable in the same function (`cumulative_water_loss`)
+# already correctly simulates ad-libitum drinking (thirst_threshold,
+# random 120-180g intake per drink) and is used for RPE and the
+# first_aid_visit screening flag -- but that correctly-hydrating value was
+# never connected to the CVR module. CHSI, and therefore CO_max and
+# CO_reserve, was being computed as if the runner never drinks, while the
+# rest of the simulation assumed realistic drinking behaviour.
+#
+# Proposed fix (not yet applied here -- needs hestia_model.py's loop
+# reordered so cumulative_water_loss is current for the same timestep
+# before the CVR snapshot is built, then pass that instead of
+# cvr_water_loss_kg): see the detailed note at that call site.
+
+
 class CVRModel:
     """
     CVR Model v2 -- rebuilt 2026-07 to implement Lloyd et al. (2022)'s

@@ -38,7 +38,7 @@ TWO FIXES CARRIED BY THIS BRIDGE (not by hestia_model.py's callers):
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-08i"
+__BUILD__ = "2026-08-09a"
 
 import multiprocessing
 import time
@@ -168,6 +168,55 @@ def _patch_air_quality(aqi_value: int):
 # =============================================================================
 # The run itself
 # =============================================================================
+def falmouth_ehs_per_1000(mean_t_air_c: float) -> float:
+    """Epidemiologically-anchored EHS rate estimate, from real incident
+    data -- NOT from HESTIA's own physiological simulation.
+
+    Source: DeMartini JK, Casa DJ, Belval LN, et al. "Environmental
+    Conditions and the Occurrence of Exertional Heat Illnesses and
+    Exertional Heat Stroke at the Falmouth Road Race." J Athl Train.
+    2014;49(4):478-485. 18 years of medical-tent records (12 years with
+    finisher counts) at the Falmouth Road Race (7 miles / 11.3 km,
+    ~10,000 runners, elite to novice). EHS defined as rectal temp
+    >=40degC with CNS dysfunction -- the same clinical definition
+    HESTIA's own conjunctive criterion targets.
+
+    Regression (their Fig. 2, fit on n=12 individual race-years):
+        EHS per 1000 finishers = 0.004 * exp(0.250 * Tamb_degC)
+        R^2 = 0.653, P = .001
+    Verified here against their Table 1 (12 individual year values):
+    mean absolute deviation ~0.64 per 1000 across the fitted range
+    (21.3-27.7 degC) -- a real, moderate-strength epidemiological fit,
+    not an exact match to any single year.
+
+    WHY THIS EXISTS: extensive testing this session (see project history)
+    found HESTIA's own raw physiological "true EHS criterion" simulation
+    over-predicts Falmouth's actual, published EHS incidence by roughly
+    20-53x across a comparable temperature range, while the RELATIVE
+    temperature-sensitivity (how fast risk grows per degree) was
+    reasonably close between the two (suggesting a scale/calibration
+    issue more than a broken shape). Pending a full re-derivation of
+    HESTIA's own internal calibration (a larger undertaking -- see
+    project notes on production-scale intercept re-estimation), this
+    formula is used as the PRIMARY, real-data-anchored EHS estimate
+    shown to users. HESTIA's raw simulation output remains available
+    but is clearly labelled as uncalibrated.
+
+    LIMITATIONS, stated plainly:
+      - Fitted on ONE specific race: a 7-mile (~11 km) point-to-point
+        event with a broad recreational-to-elite field. Applying it to
+        a very different distance, duration, or participant population
+        is itself an approximation, not a validated transfer.
+      - R^2 = 0.653 means the temperature-fitted curve explains about
+        two-thirds of the year-to-year variance in the real data --
+        real years scatter meaningfully above and below this line.
+      - Uses race-window MEAN ambient temperature, matching the
+        original paper's own methodology (their Tamb is a race-window
+        average, not a peak).
+    """
+    return 0.004 * float(np.exp(0.250 * mean_t_air_c))
+
+
 def _summarize_results(all_results: list) -> dict:
     """Population statistics from a list of per-draw simulation results.
     Shared by _cached_quick_run and run_full_precision so the two paths
@@ -203,6 +252,7 @@ def _summarize_results(all_results: list) -> dict:
     # point -- mid-race or shortly after -- is counted, and one who merely
     # has a high T_rect with intact cardiovascular reserve is not.
     true_ehs = []
+    t_rect_co_reserve_pairs = []
     for res in all_results:
         during_race = any(
             (r.get("t_rect") is not None and r.get("co_reserve") is not None
@@ -212,6 +262,18 @@ def _summarize_results(all_results: list) -> dict:
         )
         post_finish = bool(res[-1].get("ehs_postfinish", False))
         true_ehs.append(during_race or post_finish)
+
+        # Same source data as the check above, kept for the scatter plot:
+        # every point where both t_rect and co_reserve are known simultaneously.
+        for r in res:
+            t, c = r.get("t_rect"), r.get("co_reserve")
+            if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
+                t_rect_co_reserve_pairs.append((float(t), float(c)))
+        t_pf = res[-1].get("t_rect_series_postfinish") or []
+        c_pf = res[-1].get("co_reserve_series_postfinish") or []
+        for t, c in zip(t_pf, c_pf):
+            if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
+                t_rect_co_reserve_pairs.append((float(t), float(c)))
     true_ehs = np.array(true_ehs)
 
     # CO_reserve: "how much capacity is lost during and shortly after the
@@ -254,6 +316,8 @@ def _summarize_results(all_results: list) -> dict:
         "pct_reserve_remaining_median": float(np.nanmedian(pct_reserve_remaining)),
         "pct_zero_or_negative_capacity": pct_zero_or_negative,
         "n_with_valid_co_reserve": int(np.sum(valid)),
+        "worst_co_reserve_all": worst_co.tolist(),
+        "t_rect_co_reserve_pairs": t_rect_co_reserve_pairs,
     }
 
 
@@ -281,11 +345,17 @@ def _cached_quick_run(interp_data_key: tuple, lat: float, lon: float, tz_name: s
 
     workers = _capped_workers()
     t0 = time.time()
+    pop = h.generate_base_population(
+        n_simulations=n_simulations, training_factor=training_factor,
+        acclimatization_factor=acclimatization_factor, random_seed=random_seed,
+        met_value=met_value,
+    )
+    pct_pinned = float(100 * np.mean([p.pct_vo2max >= 0.9499 for p in pop])) if pop else float("nan")
     all_results, stats, results_df = h.run_monte_carlo_adult(
         interp_data, lat, lon, met_value, clo_value,
         n_simulations=n_simulations, age_configuration="standard",
         training_factor=training_factor, acclimatization_factor=acclimatization_factor,
-        use_parallel=workers > 1, random_seed=random_seed,
+        use_parallel=workers > 1, random_seed=random_seed, base_population=pop,
     )
     elapsed = time.time() - t0
 
@@ -293,6 +363,7 @@ def _cached_quick_run(interp_data_key: tuple, lat: float, lon: float, tz_name: s
         return None
 
     summary = _summarize_results(all_results)
+    summary["pct_vo2max_pinned"] = pct_pinned
     return {
         "n": len(all_results),
         "workers": workers,
@@ -319,10 +390,16 @@ def run_quick_estimate(weather_df: pd.DataFrame, lat: float, lon: float, tz_name
          round(row["globe_temp"], 2), round(row["mrt"], 2))
         for row in interp_data
     )
-    return _cached_quick_run(
+    result = _cached_quick_run(
         key, lat, lon, tz_name, met_value, clo_value,
         training_factor, acclimatization_factor, n_simulations, random_seed,
     )
+    if result is not None:
+        mean_t_air = float(np.mean([row["temp"] for row in interp_data]))
+        result = dict(result)  # cached dict is shared -- don't mutate it in place
+        result["mean_t_air_race_window"] = mean_t_air
+        result["falmouth_ehs_per_1000"] = falmouth_ehs_per_1000(mean_t_air)
+    return result
 
 
 def run_full_precision(weather_df, lat, lon, tz_name, start, finish, met_value,
@@ -370,7 +447,12 @@ def run_full_precision(weather_df, lat, lon, tz_name, start, finish, met_value,
     if progress_callback:
         progress_callback(len(worker_args), len(worker_args))
 
+    pct_pinned = float(100 * np.mean([p.pct_vo2max >= 0.9499 for p in pop])) if pop else float("nan")
     summary = _summarize_results(all_results)
+    summary["pct_vo2max_pinned"] = pct_pinned
+    mean_t_air = float(np.mean([row["temp"] for row in interp_data]))
+    summary["mean_t_air_race_window"] = mean_t_air
+    summary["falmouth_ehs_per_1000"] = falmouth_ehs_per_1000(mean_t_air)
     return {
         "n": len(all_results), "workers": workers, "elapsed_s": elapsed,
         "aqi_used": aqi,
@@ -383,12 +465,44 @@ def run_full_precision(weather_df, lat, lon, tz_name, start, finish, met_value,
 # =============================================================================
 def render_hestia_section(st_module, weather_df: pd.DataFrame, lat: float, lon: float,
                           tz_name: str, level_label: str, met_value: float,
-                          start: pd.Timestamp, finish: pd.Timestamp) -> None:
-    """One level's HESTIA panel: quick estimate always shown, full
-    precision behind an explicit button with an honest time estimate."""
-    event_minutes = max(1.0, (finish - start).total_seconds() / 60)
+                          start: pd.Timestamp, finish: pd.Timestamp) -> dict | None:
+    """One level's HESTIA panel. NOT auto-run: the quick estimate itself
+    is now gated behind an explicit per-level button (persisted in
+    st.session_state so it stays open across unrelated reruns), and full
+    precision remains behind its own separate button as before.
 
+    This used to run automatically for every eligible level on every
+    page render -- meaning the heavy HESTIA import (~384MB) and a Monte
+    Carlo run were paid unconditionally by anyone who used this app at
+    all, whether or not they cared about this section. Gating it behind
+    an explicit click means that cost, and the wall of experimental
+    numbers, only appears for someone who actually asked for it.
+
+    Returns the quick-estimate result dict (or None if not yet requested,
+    or on failure), so callers can cross-reference it against other
+    layers of the app.
+    """
+    event_minutes = max(1.0, (finish - start).total_seconds() / 60)
     st_module.markdown(f"**{level_label}**")
+
+    requested_key = f"hestia_requested_{level_label}"
+    already_requested = st_module.session_state.get(requested_key, False)
+    if not already_requested:
+        clicked = st_module.button(
+            f"\U0001F52C Calculate race-day physiology \u2014 {level_label}",
+            key=f"hestia_btn_{level_label}",
+        )
+        if clicked:
+            st_module.session_state[requested_key] = True
+        else:
+            st_module.caption(
+                "Not yet calculated for this level. This runs a real "
+                f"physiological Monte Carlo (~{QUICK_N} simulated "
+                "participants, a few seconds) \u2014 click above if you want "
+                "the race-day capacity/EHS numbers for this level."
+            )
+            return None
+
     with st_module.spinner(f"Quick estimate (n={QUICK_N})..."):
         quick = run_quick_estimate(
             weather_df, lat, lon, tz_name, start, finish, met_value,
@@ -396,57 +510,114 @@ def render_hestia_section(st_module, weather_df: pd.DataFrame, lat: float, lon: 
         )
     if quick is None:
         st_module.warning("Could not generate a population for this scenario.")
-        return
+        return None
 
-    c1, c2, c3 = st_module.columns(3)
-    c1.metric("Peak T_re, mean", f"{quick['peak_t_rect_mean']:.1f}\u00b0C")
-    c2.metric("True EHS criterion met", f"{quick['pct_true_ehs_criterion']:.1f}%",
-             help="T_rect >= 40.5\u00b0C AND CO_reserve <= 0, SIMULTANEOUSLY, "
-                  "at any point during the race or in the 10-min post-finish "
-                  "window \u2014 the author's own conjunctive hypothesis. "
-                  "T_rect alone is deliberately NOT reported as an EHS risk: "
-                  "Veltmeijer's own findings, and this hypothesis itself, "
-                  "hold that elevated T_rect without cardiovascular "
-                  "decompensation is not sufficient for harm.")
-    c3.metric("Worth monitoring (broad screen)", f"{quick['pct_first_aid']:.1f}%",
-             help="T_rect>=40.5 OR dehydration>=2% OR RPE>=17, at any point "
-                  "\u2014 a deliberately broad, over-inclusive screening flag "
-                  "(hestia_model.py), NOT a calibrated medical-incident rate. "
-                  "For contrast: DtD 2024's own observed first-aid rate was "
-                  "150/35,000 = 0.43%, a much narrower real-world quantity.")
+    pct_pinned = quick.get("pct_vo2max_pinned")
+    if pct_pinned is not None and not np.isnan(pct_pinned) and pct_pinned > 50:
+        st_module.warning(
+            f"\u26a0\ufe0f **Results withheld for {level_label}.** At this "
+            f"pace (MET {met_value:.1f}), {pct_pinned:.0f}% of the simulated "
+            "population is pinned at its physiological ceiling (95% "
+            "VO2max) \u2014 the underlying fitness distribution wasn't built "
+            "for this effort level, so individual variation collapses and "
+            "the resulting statistics would not be trustworthy. Try a "
+            "slower pace for this level, or interpret any number shown "
+            "elsewhere for it with that in mind."
+        )
+        return None
+    elif pct_pinned is not None and not np.isnan(pct_pinned) and pct_pinned > 20:
+        st_module.caption(
+            f"\u26a0\ufe0f {pct_pinned:.0f}% of the simulated population is "
+            "pinned at its physiological ceiling for this pace \u2014 "
+            "individual variation is somewhat compressed. Treat these "
+            "numbers with extra caution."
+        )
 
-    d1, d2 = st_module.columns(2)
-    reserve_left = quick.get("pct_reserve_remaining_mean")
-    zero_or_neg = quick.get("pct_zero_or_negative_capacity")
-    if reserve_left is not None and not np.isnan(reserve_left):
-        d1.metric("Avg. cardiovascular capacity remaining",
-                  f"{reserve_left:.0f}%",
-                  delta=f"-{100 - reserve_left:.0f}pp lost", delta_color="inverse")
-    if zero_or_neg is not None and not np.isnan(zero_or_neg):
-        d2.metric("Reached zero/negative capacity",
-                  f"{zero_or_neg:.1f}%",
-                  help="Share of the simulated group whose cardiac-output "
-                       "reserve reached zero or below, at any point during "
-                       "the race or in the 10 minutes after finishing.")
-    st_module.caption(
-        "\u2139\ufe0f **PROVISIONAL calibration** \u2014 the intercepts behind "
-        "HESTIA's incident-rate translation are self-labelled 'PROVISIONAL' "
-        "in the model's own source (reduced N=200 feasibility fit, not "
-        "production-scale; recalibrated after a July 2026 cardiovascular-"
-        "module rebuild). Treat these numbers as directional, not as "
-        "settled probabilities, until re-run at production scale."
-    )
-    st_module.caption(
-        "\u2139\ufe0f The middle two figures answer 'how much capacity does "
-        "an average runner lose during and shortly after the race' and "
-        "'what share reach zero or negative capacity' \u2014 using HESTIA's "
-        "own cardiac-output-reserve (Lloyd et al. 2022), evaluated at the "
-        "actual race timescale (minute-by-minute through the race plus "
-        "the 10-minute post-finish window), not PYROX's multi-day model. "
-        f"Based on {quick.get('n_with_valid_co_reserve', '?')} of "
-        f"{quick['n']} simulated participants with a usable CO_reserve "
-        "trajectory."
-    )
+    falmouth_est = quick.get("falmouth_ehs_per_1000")
+    mean_t = quick.get("mean_t_air_race_window")
+    if falmouth_est is not None:
+        e1, e2 = st_module.columns(2)
+        e1.metric(
+            "EHS estimate (epidemiologically calibrated)",
+            f"\u2248{falmouth_est:.1f} per 1000",
+            help="Estimated from REAL incident data, not HESTIA's own "
+                 "simulation: DeMartini et al. 2014 (J Athl Train "
+                 "49(4):478-485), 18 years of Falmouth Road Race medical "
+                 "records, regressed against race-window mean ambient "
+                 "temperature (R\u00b2=0.65). This is the PRIMARY EHS estimate "
+                 "this app shows -- extensive testing found HESTIA's own "
+                 "raw physiological simulation over-predicts this same "
+                 "real-world benchmark by roughly 20-50x. Limitation: "
+                 "fitted on one specific 7-mile race; applying it to a "
+                 "different distance/duration/population is itself an "
+                 "approximation, not a validated transfer.")
+        e2.metric("Race-window mean T_air", f"{mean_t:.1f}\u00b0C" if mean_t is not None else "\u2014")
+        st_module.caption(
+            "\u2139\ufe0f This estimate comes from published Falmouth Road Race "
+            "epidemiology, not from the physiological simulation below. "
+            "See 'raw physiological simulation' further down for HESTIA's "
+            "own (currently uncalibrated) mechanistic output."
+        )
+
+    with st_module.expander("Raw physiological simulation (HESTIA, currently uncalibrated)"):
+        st_module.warning(
+            "\u26a0\ufe0f The figures in this section come directly from "
+            "HESTIA's own physiological simulation, with NO correction "
+            "applied. Testing found they over-predict real Falmouth Road "
+            "Race EHS incidence by roughly 20-50x across a comparable "
+            "temperature range -- shown here for transparency and for "
+            "tracking how future recalibration changes them, not as a "
+            "number to use directly."
+        )
+        c1, c2, c3 = st_module.columns(3)
+        c1.metric("Peak T_re, mean", f"{quick['peak_t_rect_mean']:.1f}\u00b0C")
+        c2.metric("True EHS criterion met", f"{quick['pct_true_ehs_criterion']:.1f}%",
+                 help="T_rect >= 40.5\u00b0C AND CO_reserve <= 0, SIMULTANEOUSLY, "
+                      "at any point during the race or in the 10-min post-finish "
+                      "window \u2014 the author's own conjunctive hypothesis. "
+                      "T_rect alone is deliberately NOT reported as an EHS risk: "
+                      "Veltmeijer's own findings, and this hypothesis itself, "
+                      "hold that elevated T_rect without cardiovascular "
+                      "decompensation is not sufficient for harm.")
+        c3.metric("Worth monitoring (broad screen)", f"{quick['pct_first_aid']:.1f}%",
+                 help="T_rect>=40.5 OR dehydration>=2% OR RPE>=17, at any point "
+                      "\u2014 a deliberately broad, over-inclusive screening flag "
+                      "(hestia_model.py), NOT a calibrated medical-incident rate. "
+                      "For contrast: DtD 2024's own observed first-aid rate was "
+                      "150/35,000 = 0.43%, a much narrower real-world quantity.")
+
+        d1, d2 = st_module.columns(2)
+        reserve_left = quick.get("pct_reserve_remaining_mean")
+        zero_or_neg = quick.get("pct_zero_or_negative_capacity")
+        if reserve_left is not None and not np.isnan(reserve_left):
+            d1.metric("Avg. cardiovascular capacity remaining",
+                      f"{reserve_left:.0f}%",
+                      delta=f"-{100 - reserve_left:.0f}pp lost", delta_color="inverse")
+        if zero_or_neg is not None and not np.isnan(zero_or_neg):
+            d2.metric("Reached zero/negative capacity",
+                      f"{zero_or_neg:.1f}%",
+                      help="Share of the simulated group whose cardiac-output "
+                           "reserve reached zero or below, at any point during "
+                           "the race or in the 10 minutes after finishing.")
+        st_module.caption(
+            "\u2139\ufe0f **PROVISIONAL calibration** \u2014 the intercepts behind "
+            "HESTIA's incident-rate translation are self-labelled 'PROVISIONAL' "
+            "in the model's own source (reduced N=200 feasibility fit, not "
+            "production-scale; recalibrated after a July 2026 cardiovascular-"
+            "module rebuild). Treat these numbers as directional, not as "
+            "settled probabilities, until re-run at production scale."
+        )
+        st_module.caption(
+            "\u2139\ufe0f The middle two figures answer 'how much capacity does "
+            "an average runner lose during and shortly after the race' and "
+            "'what share reach zero or negative capacity' \u2014 using HESTIA's "
+            "own cardiac-output-reserve (Lloyd et al. 2022), evaluated at the "
+            "actual race timescale (minute-by-minute through the race plus "
+            "the 10-minute post-finish window), not PYROX's multi-day model. "
+            f"Based on {quick.get('n_with_valid_co_reserve', '?')} of "
+            f"{quick['n']} simulated participants with a usable CO_reserve "
+            "trajectory."
+        )
 
     st_module.caption(
         f"Quick estimate, n={quick['n']} (of the app's own simulated population, "
@@ -501,3 +672,5 @@ def render_hestia_section(st_module, weather_df: pd.DataFrame, lat: float, lon: 
                 f"Full precision, n={full['n']}, {full['elapsed_s']:.1f}s on "
                 f"{full['workers']} worker(s)."
             )
+
+    return quick

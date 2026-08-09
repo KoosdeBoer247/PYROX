@@ -40,7 +40,7 @@ from __future__ import annotations
 
 # Module build stamp -- shown in the app sidebar so a stale file is
 # immediately identifiable instead of inferred from a traceback.
-__BUILD__ = "2026-08-08i"
+__BUILD__ = "2026-08-09a"
 
 from itertools import groupby
 from functools import lru_cache
@@ -355,12 +355,15 @@ def worst_flag(exposure: dict) -> str:
 
 def render_flag_reserve_crosscheck(st, per_level_exposure: dict, pyrox_result: dict,
                                     label_for: dict, exp_date, session_hours: dict,
-                                    daily_met: dict) -> None:
+                                    daily_met: dict) -> list:
     """Explain, in place, when the same-day WBGT flag and PYROX's
     multi-day reserve disagree for the chosen race date -- rather than
     leaving 'High risk' next to '100% reserve, coping' with no visible
     reason, which reads as a contradiction (it is not one: the two answer
     different questions, at different timescales -- see below).
+
+    Returns the list of per-level explanatory strings that fired (empty
+    if nothing did), so callers can log what was shown, not just display it.
     """
     from loop_view import reserve_series
 
@@ -387,7 +390,7 @@ def render_flag_reserve_crosscheck(st, per_level_exposure: dict, pyrox_result: d
                     session_hours.get(level_label), daily_met.get(level_label)))
 
     if not rows:
-        return
+        return []
 
     st.warning(
         "\u26a0\ufe0f **Why does the flag above say high risk while the reserve "
@@ -404,12 +407,80 @@ def render_flag_reserve_crosscheck(st, per_level_exposure: dict, pyrox_result: d
         "Trust the reserve only for multi-day load** (training block into "
         "race day), not as a verdict on the race itself."
     )
+    fired = []
     for level_label, flag_name, reserve_pct, hrs, met in rows:
-        st.caption(
-            f"**{level_label}**: {flag_name} flag, but {reserve_pct:.0f}% "
-            f"reserve on this date \u2014 {hrs:.2f}h on course diluted to an "
-            f"effective {met:.1f} MET against the 8h reference."
-        )
+        detail = (f"{flag_name} flag, but {reserve_pct:.0f}% reserve on this "
+                 f"date \u2014 {hrs:.2f}h on course diluted to an effective "
+                 f"{met:.1f} MET against the 8h reference.")
+        st.caption(f"**{level_label}**: {detail}")
+        fired.append(f"{level_label}: {detail}")
+    return fired
+
+
+def render_pyrox_hestia_crosscheck(st, hestia_results: dict, pyrox_result: dict,
+                                    label_for: dict, exp_date) -> list:
+    """Cross-check PYROX's multi-day reserve against HESTIA's acute,
+    race-timescale capacity finding, for the SAME level and chosen date.
+
+    Built because the two can legitimately read as contradictory side by
+    side: PYROX's reserve chart can show ~100% (a 1-2h race is diluted
+    almost to nothing by PYROX's 8-hour-shift MET weighting -- see the
+    flag/reserve cross-check above for the same effect against WBGT),
+    while HESTIA -- computed at the real race timescale, with actual
+    cardiovascular physiology -- can show a large share of the simulated
+    field reaching zero or negative capacity for that same race. Without
+    this note, a green 'no divergence' checkmark on the PYROX/WBGT
+    comparison sitting near a red HESTIA finding reads as the app
+    contradicting itself, when the two are answering different questions
+    at different timescales.
+    """
+    from loop_view import reserve_series
+
+    rows = []
+    for name, res in pyrox_result["groups"].items():
+        level_label = label_for.get(name, name)
+        hestia = hestia_results.get(level_label)
+        if hestia is None:
+            continue
+        zero_neg = hestia.get("pct_zero_or_negative_capacity")
+        if zero_neg is None or np.isnan(zero_neg) or zero_neg < 10:
+            continue  # HESTIA itself sees nothing notable -- nothing to explain
+
+        dates = pyrox_result["dates"]
+        target = pd.Timestamp(exp_date).date()
+        matches = [i for i, d in enumerate(dates) if pd.Timestamp(d).date() == target]
+        if not matches:
+            continue
+        pyrox_reserve = reserve_series(res)[matches[0]]
+        if pyrox_reserve < 75:
+            continue  # PYROX already agrees something is wrong -- no gap to explain
+
+        rows.append((level_label, pyrox_reserve, zero_neg))
+
+    if not rows:
+        return []
+
+    st.warning(
+        "\u26a0\ufe0f **PYROX's multi-day reserve and HESTIA's acute capacity "
+        "finding disagree for the chosen date \u2014 by design, not by "
+        "error.** PYROX shows plenty of multi-day reserve because a "
+        "1\u20132 hour race is diluted almost to nothing by its 8-hour-shift "
+        "MET weighting (the same effect explained in the flag/reserve "
+        "cross-check above). HESTIA, computed at the real race timescale "
+        "with actual cardiovascular physiology, sees the acute picture "
+        "directly. **For this race, trust HESTIA's numbers over PYROX's "
+        "reserve chart** \u2014 PYROX was not built to answer this question "
+        "at all."
+    )
+    fired = []
+    for level_label, pyrox_reserve, zero_neg in rows:
+        detail = (f"PYROX reserve {pyrox_reserve:.0f}% on this date, but "
+                 f"HESTIA finds {zero_neg:.1f}% of the simulated field "
+                 "reaching zero/negative cardiovascular capacity during or "
+                 "shortly after this same race.")
+        st.caption(f"**{level_label}**: {detail}")
+        fired.append(f"{level_label}: {detail}")
+    return fired
 
 
 def flag_colour(status: str) -> str:

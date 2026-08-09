@@ -22,6 +22,7 @@ decision_support, gpx_route, Thermopoulos_Data_Engine) so a fix in one
 place applies to both.
 """
 
+import io
 import time
 from datetime import date, timedelta
 
@@ -46,15 +47,119 @@ from pyrox_revised_calibration import K_PER_MET, MET_REFERENCE, onset_temperatur
 from decision_support import (
     render_hourly_safety_panel, relative_risk_text,
     exposure_by_flag, flag_display_name, flag_colour,
-    render_flag_reserve_crosscheck,
+    render_flag_reserve_crosscheck, render_pyrox_hestia_crosscheck,
 )
 from gpx_route import parse_gpx, route_summary, render_race_profile, route_map
 from loop_view import render_loop_view
 from evidence import render_evidence_panel
 from plain_view import render_plain_view
 from experimental_risk import render_experimental_section
+from report_generator import generate_report_docx
 
-APP_BUILD = "2026-08-08i (true conjunctive EHS criterion)"
+APP_BUILD = "2026-08-09a (Falmouth-calibrated EHS estimate)"
+
+
+def prediction_record_excel_bytes(
+    city_name: str, lat: float, lon: float, tz_name: str,
+    exp_start, per_level_exposure: dict, pyrox_result: dict, label_for: dict,
+    hestia_results: dict, session_hours: dict, daily_met: dict,
+    forecast_df: pd.DataFrame, flag_warnings: list, hestia_warnings: list,
+) -> bytes:
+    """A single-file record of a prediction, made BEFORE an event or
+    heatwave, in a form built for LATER comparison against what actually
+    happened -- not a status export.
+
+    Why this exists: Koos is running this app in parallel with real
+    events and expected heatwaves. Without something that survives the
+    session, every prediction is lost the moment the tab closes or
+    Streamlit Cloud reboots (its filesystem is ephemeral -- nothing
+    written server-side persists across a redeploy). This is also the
+    concrete path from PROVISIONAL calibration to something stronger:
+    each parallel run is a comparison point against real GHOR incident
+    data, the same kind of evidence the original DtD calibration used,
+    just gathered forward instead of retrospectively.
+
+    Deliberately includes empty columns for the real outcome, so the
+    SAME file can be completed after the event rather than needing a
+    second document to be created and manually matched up later.
+    """
+    buf = io.BytesIO()
+
+    def _strip_tz(df):
+        df = df.copy()
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+        return df
+
+    from loop_view import reserve_series
+    from decision_support import worst_flag, flag_display_name
+
+    made_at = pd.Timestamp.now(tz=tz_name)
+    exp_date = pd.Timestamp(exp_start).date()
+
+    meta = {
+        "prediction_made_at": made_at.strftime("%Y-%m-%d %H:%M %Z"),
+        "app_build": APP_BUILD,
+        "city": city_name, "lat": lat, "lon": lon, "timezone": tz_name,
+        "race_date": str(exp_date), "race_start_time": pd.Timestamp(exp_start).strftime("%H:%M"),
+        "note": ("This is a PRE-EVENT prediction. Fill in the 'actual_*' "
+                "columns in the Per_Level sheet once real outcomes are "
+                "known, to build a comparison record over time."),
+    }
+
+    rows = []
+    for name, res in pyrox_result["groups"].items():
+        level_label = label_for.get(name, name)
+        exposure = per_level_exposure.get(level_label, {})
+        flag = worst_flag(exposure) if exposure else None
+        dates = pyrox_result["dates"]
+        matches = [i for i, d in enumerate(dates) if pd.Timestamp(d).date() == exp_date]
+        reserve_val = reserve_series(res)[matches[0]] if matches else float("nan")
+        hestia = hestia_results.get(level_label)
+
+        rows.append({
+            "level": level_label,
+            "session_hours": session_hours.get(level_label),
+            "daily_weighted_met": daily_met.get(level_label),
+            "worst_wbgt_flag": flag_display_name(flag) if flag else "no data",
+            "pyrox_reserve_pct_on_race_date": round(reserve_val, 1) if not pd.isna(reserve_val) else None,
+            "hestia_computed": hestia is not None,
+            "hestia_peak_t_re_mean_c": round(hestia["peak_t_rect_mean"], 2) if hestia else None,
+            "hestia_true_ehs_criterion_pct": round(hestia["pct_true_ehs_criterion"], 1) if hestia else None,
+            "hestia_broad_screen_pct": round(hestia["pct_first_aid"], 1) if hestia else None,
+            "hestia_avg_capacity_remaining_pct": round(hestia["pct_reserve_remaining_mean"], 1) if hestia else None,
+            "hestia_zero_or_negative_capacity_pct": round(hestia["pct_zero_or_negative_capacity"], 1) if hestia else None,
+            "hestia_vo2max_pinned_pct": round(hestia.get("pct_vo2max_pinned", float("nan")), 1) if hestia else None,
+            "hestia_calibration_status": "PROVISIONAL (N=200, not production-scale)" if hestia else "",
+            # Deliberately empty -- fill in once the real outcome is known.
+            "actual_first_aid_visits": None,
+            "actual_hospitalisations": None,
+            "actual_ehs_cases": None,
+            "actual_participant_count": None,
+            "notes": None,
+        })
+    per_level_df = pd.DataFrame(rows)
+
+    warnings_rows = (
+        [{"type": "flag_vs_pyrox_reserve", "text": w} for w in flag_warnings]
+        + [{"type": "pyrox_vs_hestia_capacity", "text": w} for w in hestia_warnings]
+    )
+    warnings_df = pd.DataFrame(warnings_rows) if warnings_rows else pd.DataFrame(
+        [{"type": "none", "text": "No divergence warnings fired for this run."}])
+
+    weather_window = forecast_df[
+        (forecast_df.index >= pd.Timestamp(exp_start) - pd.Timedelta(hours=6))
+        & (forecast_df.index <= pd.Timestamp(exp_start) + pd.Timedelta(hours=6))
+    ]
+
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        pd.DataFrame([meta]).to_excel(writer, sheet_name="Metadata", index=False)
+        per_level_df.to_excel(writer, sheet_name="Per_Level", index=False)
+        warnings_df.to_excel(writer, sheet_name="Divergence_Warnings", index=False)
+        _strip_tz(weather_window).to_excel(writer, sheet_name="Weather_Used")
+
+    return buf.getvalue()
+
 
 # -----------------------------------------------------------------------------
 # Athlete levels. Each maps to an existing PYROX group -- no new calibration is
@@ -618,14 +723,14 @@ if st.session_state.results and selected_levels:
     )
 
     render_plain_view(st, pyrox_result, label_for, target_date=exp_date)
-    render_flag_reserve_crosscheck(
+    flag_warnings = render_flag_reserve_crosscheck(
         st, per_level_exposure, pyrox_result, label_for, exp_date,
         session_hours, daily_met,
     )
 
     st.divider()
     level_modes = {lvl: LEVELS[lvl]["mode"] for lvl in selected_levels}
-    render_experimental_section(
+    hestia_results = render_experimental_section(
         st, pyrox_result, label_for, forecast_df, level_modes,
         exp_start, session_km, paces,
         hestia_ctx={"lat": lat, "lon": lon, "tz_name": tz},
@@ -669,6 +774,42 @@ if st.session_state.results and selected_levels:
 
     st.divider()
     render_loop_view(st, pyrox_result, forecast_df, label_for)
+    hestia_warnings = render_pyrox_hestia_crosscheck(
+        st, hestia_results, pyrox_result, label_for, exp_date)
+
+    st.divider()
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.download_button(
+            "\U0001F4E5 Download prediction record (Excel)",
+            data=prediction_record_excel_bytes(
+                city["name"], lat, lon, tz, exp_start, per_level_exposure,
+                pyrox_result, label_for, hestia_results, session_hours, daily_met,
+                forecast_df, flag_warnings, hestia_warnings,
+            ),
+            file_name=f"pyrox_prediction_{city['name']}_{exp_date}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            help="Saves this run's numbers (across all layers) with empty "
+                 "columns for the real outcome, for later comparison. "
+                 "Streamlit Cloud does not persist anything on its own -- "
+                 "download this if you want to keep the prediction.",
+        )
+    with col_b:
+        slowest_pace = max(paces.values()) if paces else 12.0
+        latest_finish = pd.Timestamp(exp_start) + pd.Timedelta(minutes=slowest_pace * session_km)
+        st.download_button(
+            "\U0001F4C4 Download findings report (Word)",
+            data=generate_report_docx(
+                city["name"], exp_start, forecast_df, per_level_exposure,
+                pyrox_result, label_for, hestia_results, latest_finish,
+                flag_warnings, hestia_warnings, tz, APP_BUILD,
+            ),
+            file_name=f"pyrox_report_{city['name']}_{exp_date}.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            help="A readable Word report of the same findings, for sharing "
+                 "with GHOR or event organisers. Data and findings only -- "
+                 "deliberately does not recommend any operational measures.",
+        )
 
     render_evidence_panel(st)
 

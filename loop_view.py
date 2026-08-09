@@ -36,7 +36,7 @@ extrapolated rather than published.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-08i"
+__BUILD__ = "2026-08-09a"
 
 import numpy as np
 import pandas as pd
@@ -230,9 +230,13 @@ def render_loop_view(st, pyrox_result: dict, weather_df: pd.DataFrame,
         st.dataframe(div, use_container_width=True, hide_index=True)
     else:
         st.success(
-            "\u2705 No divergence in this period: wherever reserve is low, the "
-            "WBGT flag already indicates elevated risk, so the index and the "
-            "loop agree."
+            "\u2705 No divergence against the same-day WBGT flag in this "
+            "period: wherever this multi-day reserve is low, the WBGT flag "
+            "already indicates elevated risk too. This checks WBGT against "
+            "PYROX's multi-day model only \u2014 if a HESTIA acute assessment "
+            "is shown elsewhere on this page, check that separately: it "
+            "answers a different, race-timescale question this comparison "
+            "does not cover."
         )
 
     with st.expander("Daily loop balance — load in versus recovery out"):

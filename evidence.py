@@ -14,7 +14,7 @@ plainly as the supported ones.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-08i"
+__BUILD__ = "2026-08-09a"
 
 
 # Each entry: the claim the app makes, the sources, and the honest limit.
@@ -127,6 +127,42 @@ EVIDENCE = [
         "limit":
             "Correct use of validated components does not make the "
             "combination validated.",
+        "status": "supported",
+    },
+    {
+        "claim": "The app's EHS estimate is anchored to real incident data",
+        "why_it_matters":
+            "The single most operationally relevant number this app "
+            "produces -- 'how many per 1000 participants might experience "
+            "EHS' -- needed a real-world anchor, not just a physiological "
+            "simulation.",
+        "sources": [
+            ("DeMartini JK, Casa DJ, Belval LN, et al., Environmental "
+             "Conditions and the Occurrence of Exertional Heat Illnesses "
+             "and Exertional Heat Stroke at the Falmouth Road Race",
+             "J Athl Train 49(4):478-485 (2014)",
+             "18 years of Falmouth Road Race medical-tent records (12 "
+             "years with finisher counts). EHS per 1000 finishers = "
+             "0.004*exp(0.250*Tamb), R\u00b2=0.65, P=.001, fitted on n=12 "
+             "individual race-years. Verified in this app against the "
+             "paper's own Table 1 (mean absolute deviation ~0.64 per 1000 "
+             "across the fitted 21-27\u00b0C range)."),
+        ],
+        "limit":
+            "Extensive testing found HESTIA's own raw physiological "
+            "simulation over-predicts this same real-world benchmark by "
+            "roughly 20-50x across a comparable temperature range -- the "
+            "app therefore shows the Falmouth-based estimate as the "
+            "primary EHS figure, with HESTIA's raw simulation kept "
+            "visible but clearly marked as uncalibrated. This is a "
+            "genuine, published, peer-reviewed regression -- but it was "
+            "fitted on ONE specific 7-mile race with a broad "
+            "recreational-to-elite field. Applying it to a different "
+            "distance, duration, or participant population is an "
+            "approximation, not a validated transfer. R\u00b2=0.65 also "
+            "means real years scatter meaningfully around this line -- it "
+            "explains about two-thirds of year-to-year variance, not all "
+            "of it.",
         "status": "supported",
     },
     {

@@ -39,3 +39,6 @@ matplotlib>=3.7
 seaborn>=0.12
 tqdm>=4.60
 colorama>=0.4
+
+# report_generator.py -- Word findings-report export (app_athletes.py)
+python-docx>=1.1

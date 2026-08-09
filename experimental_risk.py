@@ -82,22 +82,16 @@ LEVEL_DEMOGRAPHICS = {
 }
 RIDGE_VALID_AGE = (60, 100)
 
-#: Groups excluded from the HESTIA section specifically (the other two
-#: indicators above still run for them). Keyed on the PYROX group name
-#: (pyrox_bridge.TARGET_GROUPS key), not the display label, so this
-#: survives a future rename of the level.
-#:
-#: elite_athletes: at elite pace (MET ~18.6 via the ACSM running equation),
-#: HESTIA's own generate_base_population() flagged ~99% of the simulated
-#: population pinned at maximum sustainable effort (95% VO2max) -- the
-#: underlying fitness distribution was not built for this effort level, so
-#: individual variation collapses and the resulting EHS statistics are not
-#: trustworthy at this MET. Recreational (~27% pinned at MET ~10.5) and all
-#: walker levels (MET 2.9-3.4, no pinning observed) do not show this
-#: problem and remain included. Re-enable only after either widening the
-#: base population's fitness distribution for this MET range, or
-#: confirming the pinning fraction has genuinely dropped.
-HESTIA_EXCLUDED_GROUPS = {"elite_athletes"}
+#: VO2max-pinning gating is now DYNAMIC (see hestia_bridge.render_hestia_
+#: section), computed per call from the actual MET used -- not a static
+#: list here. That static list only ever covered elite_athletes (99%
+#: pinned at its default pace), and testing later found endurance_
+#: athletes ALSO severely pinned (72% at its default pace) -- a level the
+#: static list never caught, because pace is user-adjustable and a fixed
+#: per-group list can't track that. The dynamic check in hestia_bridge.py
+#: measures the real pinning fraction for whatever MET is actually in use
+#: and gates on that directly, which is correct for any pace a level is
+#: configured with, not just the default.
 
 
 def is_t_re_eligible(level_label: str) -> bool:
@@ -251,7 +245,13 @@ def t_re_chart(level_label: str, t_re: np.ndarray, start_time: pd.Timestamp):
 def render_experimental_section(st, pyrox_result: dict, label_for: dict,
                                 weather_df: pd.DataFrame, level_modes: dict,
                                 exp_start, session_km: float, paces: dict,
-                                hestia_ctx: dict = None) -> None:
+                                hestia_ctx: dict = None) -> dict:
+    """Returns {level_label: hestia_quick_result} for every level HESTIA
+    actually ran on (empty dict if HESTIA is unavailable/not requested) --
+    so callers can cross-reference HESTIA's acute, race-timescale finding
+    against other layers of the app (e.g. PYROX's multi-day reserve),
+    which otherwise have no way of knowing about each other.
+    """
     st.header("\U0001F9EA EXPERIMENTAL \u2014 collapse risk & EHS indicators")
     st.warning(
         "\u26a0\ufe0f **Experimental.** Two different indicators, kept deliberately "
@@ -327,41 +327,31 @@ def render_experimental_section(st, pyrox_result: dict, label_for: dict,
             "re-fit at a reduced N=200 (not production scale) after a "
             "July 2026 rebuild of the cardiovascular module, pending "
             "production-scale reconfirmation. Treat outputs as directional "
-            "research estimates, not settled probabilities. A quick "
-            "estimate (small sample) runs automatically below; full "
-            "precision (n=5000) is available on request and can take "
-            "several minutes \u2014 it is never triggered automatically."
+            "research estimates, not settled probabilities. Nothing here "
+            "runs automatically: click the button under each level below "
+            "for a quick estimate (a few seconds); full precision (n=5000, "
+            "several minutes) is a separate, further opt-in after that."
         )
         lat, lon, tz_name = hestia_ctx["lat"], hestia_ctx["lon"], hestia_ctx["tz_name"]
-        excluded_any = False
+        hestia_results = {}
         for name, res in pyrox_result["groups"].items():
             level_label = label_for.get(name, name)
             pace = paces.get(level_label)
             if pace is None:
                 continue
-            if name in HESTIA_EXCLUDED_GROUPS:
-                excluded_any = True
-                continue
             finish = pd.Timestamp(exp_start) + pd.Timedelta(minutes=pace * session_km)
             met_value = met_from_pace(pace, mode=level_modes.get(level_label, "run"))
-            render_hestia_section(
+            quick = render_hestia_section(
                 st, weather_df, lat, lon, tz_name, level_label, met_value,
                 pd.Timestamp(exp_start), finish,
             )
-        if excluded_any:
-            st.caption(
-                "\u2139\ufe0f Elite runners are not run through HESTIA here. At "
-                "elite pace (MET \u224818.6), HESTIA's own base-population "
-                "generator flagged that ~99% of the simulated population is "
-                "pinned at maximum sustainable effort (95% VO2max) \u2014 the "
-                "underlying fitness distribution wasn't built for this "
-                "effort level, so results there would not be trustworthy. "
-                "Recreational (~27% pinned) and all walker levels (no "
-                "pinning observed) are shown above."
-            )
+            if quick is not None:
+                hestia_results[level_label] = quick
+        return hestia_results
     elif hestia_ctx is not None and not HESTIA_AVAILABLE:
         st.caption(
             "\u2139\ufe0f HESTIA individual-tier Monte Carlo is unavailable in this "
             f"deployment ({_HESTIA_IMPORT_ERROR}). The two indicators above "
             "are unaffected."
         )
+    return {}
