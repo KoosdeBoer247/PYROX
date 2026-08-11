@@ -34,7 +34,7 @@ from __future__ import annotations
 
 # Module build stamp -- shown in the app sidebar so a stale file is
 # immediately identifiable instead of inferred from a traceback.
-__BUILD__ = "2026-08-09a"
+__BUILD__ = "2026-08-10b"
 
 import math
 import xml.etree.ElementTree as ET

@@ -56,7 +56,7 @@ from plain_view import render_plain_view
 from experimental_risk import render_experimental_section
 from report_generator import generate_report_docx
 
-APP_BUILD = "2026-08-09a (Falmouth-calibrated EHS estimate)"
+APP_BUILD = "2026-08-10b (dose-response refit post-clo-fix)"
 
 
 def prediction_record_excel_bytes(
@@ -803,6 +803,10 @@ if st.session_state.results and selected_levels:
                 city["name"], exp_start, forecast_df, per_level_exposure,
                 pyrox_result, label_for, hestia_results, latest_finish,
                 flag_warnings, hestia_warnings, tz, APP_BUILD,
+                met_by_level_label={label_for.get(lvl, lvl): met_by_level[lvl]
+                                    for lvl in met_by_level},
+                duration_by_level_label={label_for.get(lvl, lvl): paces[lvl] * session_km
+                                         for lvl in paces},
             ),
             file_name=f"pyrox_report_{city['name']}_{exp_date}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",

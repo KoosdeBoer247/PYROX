@@ -38,7 +38,7 @@ TWO FIXES CARRIED BY THIS BRIDGE (not by hestia_model.py's callers):
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-09a"
+__BUILD__ = "2026-08-10b"
 
 import multiprocessing
 import time
@@ -217,6 +217,64 @@ def falmouth_ehs_per_1000(mean_t_air_c: float) -> float:
     return 0.004 * float(np.exp(0.250 * mean_t_air_c))
 
 
+#: Logistic dose-response parameters, jointly fit against the Falmouth
+#: regression across 5 temperature scenarios (22-34C) using REAL individual
+#: dose values from n=120 simulated participants per scenario.
+#:
+#: [refit, 2026-08-10] Re-fit after the clo_value correction (0.5 -> 0.2,
+#: see run_quick_estimate() docstring). The ORIGINAL fit (a=-6.933,
+#: b=0.1981) was calibrated against simulations that ran systematically
+#: too hot; this refit uses the corrected clo=0.2 simulations instead.
+#:
+#: HONEST LIMITATION: fit quality is WORSE than the original fit (sum-
+#: squared log error 0.186 vs 0.015), not because anything is wrong, but
+#: because far fewer participants now enter the danger quadrant at all --
+#: 0/120 at 22-25C, 1-2/120 at 28-31C, 13/120 at 34C. With this few
+#: positive-dose observations, especially at the cooler end, the curve is
+#: only loosely constrained. This is a direct, expected consequence of
+#: fixing the over-prediction: fewer false positives means less data to
+#: fit a dose-response curve from, at this sample size. Predicted/target
+#: ratio ranged 0.59-1.79x across the 5 scenarios (vs 0.81-1.14x
+#: pre-fix) -- treat this even more cautiously than before; a much
+#: larger N (the same production-scale requirement noted throughout this
+#: project) would be needed for a well-determined refit.
+_DOSE_RESPONSE_A = -6.3837
+_DOSE_RESPONSE_B = 0.4486
+
+
+def cumulative_deficit_dose(res: list) -> float:
+    """Cumulative CO_reserve deficit-minutes while T_rect>=40.5 AND
+    CO_reserve<=0 (race + post-finish), for one simulated participant.
+
+    Unlike the binary 'true EHS criterion' (in/out of the danger
+    quadrant) or a hard duration threshold, this weights BOTH how deep
+    into deficit someone goes AND how long they stay there -- analogous
+    to cumulative-equivalent-minutes dose models used in hyperthermia
+    medicine (e.g. CEM43), rather than treating every quadrant-timestep
+    as equally severe regardless of depth.
+    """
+    dose = 0.0
+    for r in res:
+        t, c = r.get("t_rect"), r.get("co_reserve")
+        if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
+            if t >= 40.5 and c <= 0:
+                dose += abs(c) * 10.0  # 10-min race timesteps -> L/min-minutes
+    pf_t = res[-1].get("t_rect_series_postfinish") or []
+    pf_c = res[-1].get("co_reserve_series_postfinish") or []
+    for t, c in zip(pf_t, pf_c):
+        if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
+            if t >= 40.5 and c <= 0:
+                dose += abs(c) * 0.5  # ~30s post-finish timesteps
+    return dose
+
+
+def dose_response_ehs_probability(dose: float) -> float:
+    """Maps a cumulative deficit dose to an estimated EHS probability via
+    the jointly-fit logistic curve. See _DOSE_RESPONSE_A/B docstring for
+    fit provenance and honest limitations."""
+    return 1.0 / (1.0 + np.exp(-(_DOSE_RESPONSE_A + _DOSE_RESPONSE_B * dose)))
+
+
 def _summarize_results(all_results: list) -> dict:
     """Population statistics from a list of per-draw simulation results.
     Shared by _cached_quick_run and run_full_precision so the two paths
@@ -253,6 +311,7 @@ def _summarize_results(all_results: list) -> dict:
     # has a high T_rect with intact cardiovascular reserve is not.
     true_ehs = []
     t_rect_co_reserve_pairs = []
+    doses = []
     for res in all_results:
         during_race = any(
             (r.get("t_rect") is not None and r.get("co_reserve") is not None
@@ -262,6 +321,7 @@ def _summarize_results(all_results: list) -> dict:
         )
         post_finish = bool(res[-1].get("ehs_postfinish", False))
         true_ehs.append(during_race or post_finish)
+        doses.append(cumulative_deficit_dose(res))
 
         # Same source data as the check above, kept for the scatter plot:
         # every point where both t_rect and co_reserve are known simultaneously.
@@ -275,6 +335,8 @@ def _summarize_results(all_results: list) -> dict:
             if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
                 t_rect_co_reserve_pairs.append((float(t), float(c)))
     true_ehs = np.array(true_ehs)
+    doses = np.array(doses)
+    dose_response_pct = float(100.0 * np.mean(dose_response_ehs_probability(doses)))
 
     # CO_reserve: "how much capacity is lost during and shortly after the
     # race", and "% reaching zero/negative capacity". Baseline = first
@@ -316,6 +378,8 @@ def _summarize_results(all_results: list) -> dict:
         "pct_reserve_remaining_median": float(np.nanmedian(pct_reserve_remaining)),
         "pct_zero_or_negative_capacity": pct_zero_or_negative,
         "n_with_valid_co_reserve": int(np.sum(valid)),
+        "pct_dose_response_ehs": dose_response_pct,
+        "cumulative_doses_all": doses.tolist(),
         "worst_co_reserve_all": worst_co.tolist(),
         "t_rect_co_reserve_pairs": t_rect_co_reserve_pairs,
     }
@@ -375,11 +439,28 @@ def _cached_quick_run(interp_data_key: tuple, lat: float, lon: float, tz_name: s
 
 def run_quick_estimate(weather_df: pd.DataFrame, lat: float, lon: float, tz_name: str,
                        start: pd.Timestamp, finish: pd.Timestamp,
-                       met_value: float, clo_value: float = 0.5,
+                       met_value: float, clo_value: float = 0.2,
                        training_factor: float = 0.5, acclimatization_factor: float = 0.5,
                        n_simulations: int = QUICK_N, random_seed: int = 42) -> dict | None:
     """The quick-estimate entry point: small N, capped workers, cached by
-    scenario. This is the one safe to call on every page render."""
+    scenario. This is the one safe to call on every page render.
+
+    [fix, 2026-08-10] clo_value default changed from 0.5 to 0.2. 0.5 (light
+    indoor clothing per ISO 9920) was being applied to every scenario
+    regardless of conditions, including hot-weather running kit (shorts +
+    t-shirt + socks + shoes), which standard clo tables put at ~0.2-0.3, not
+    0.5. Tested directly: at ~32degC/MET 10.5/96min, clo=0.5 gave a median
+    peak race-phase T_rect of 41.4degC with 93% of the simulated population
+    exceeding the clinical EHS threshold (40.5degC) -- clo=0.2 brought that
+    to 40.0degC median and 8%, much closer to real measured data (Veltmeijer
+    et al. 2014, JSAMS: 15% >=40degC in a 15km race, albeit in COOLER
+    WBGT=11degC conditions -- so some elevation above 15% would still be
+    expected at 32degC; 8% may itself run slightly low, worth revisiting
+    once production-scale validation is done). This was the single largest
+    contributor found in that investigation to HESTIA's T_rect
+    over-prediction -- larger than any single factor found in the earlier
+    CO_reserve/CHSI work.
+    """
     interp_data = build_interp_data(weather_df, start, finish)
     # Hashable cache key: round timestamps/floats to avoid float-noise cache
     # misses between visually-identical reruns.
@@ -403,7 +484,7 @@ def run_quick_estimate(weather_df: pd.DataFrame, lat: float, lon: float, tz_name
 
 
 def run_full_precision(weather_df, lat, lon, tz_name, start, finish, met_value,
-                       clo_value=0.5, training_factor=0.5, acclimatization_factor=0.5,
+                       clo_value=0.2, training_factor=0.5, acclimatization_factor=0.5,
                        n_simulations=5000, random_seed=42,
                        progress_callback=None) -> dict | None:
     """Full-precision run. NOT cached at this level -- the quick-estimate
@@ -535,29 +616,61 @@ def render_hestia_section(st_module, weather_df: pd.DataFrame, lat: float, lon: 
 
     falmouth_est = quick.get("falmouth_ehs_per_1000")
     mean_t = quick.get("mean_t_air_race_window")
-    if falmouth_est is not None:
-        e1, e2 = st_module.columns(2)
-        e1.metric(
-            "EHS estimate (epidemiologically calibrated)",
-            f"\u2248{falmouth_est:.1f} per 1000",
-            help="Estimated from REAL incident data, not HESTIA's own "
-                 "simulation: DeMartini et al. 2014 (J Athl Train "
-                 "49(4):478-485), 18 years of Falmouth Road Race medical "
-                 "records, regressed against race-window mean ambient "
-                 "temperature (R\u00b2=0.65). This is the PRIMARY EHS estimate "
-                 "this app shows -- extensive testing found HESTIA's own "
-                 "raw physiological simulation over-predicts this same "
-                 "real-world benchmark by roughly 20-50x. Limitation: "
-                 "fitted on one specific 7-mile race; applying it to a "
-                 "different distance/duration/population is itself an "
-                 "approximation, not a validated transfer.")
-        e2.metric("Race-window mean T_air", f"{mean_t:.1f}\u00b0C" if mean_t is not None else "\u2014")
-        st_module.caption(
-            "\u2139\ufe0f This estimate comes from published Falmouth Road Race "
-            "epidemiology, not from the physiological simulation below. "
-            "See 'raw physiological simulation' further down for HESTIA's "
-            "own (currently uncalibrated) mechanistic output."
-        )
+    dose_pct = quick.get("pct_dose_response_ehs")
+
+    if dose_pct is not None:
+        race_minutes = (finish - start).total_seconds() / 60.0
+        # The dose-response curve (_DOSE_RESPONSE_A/B) was jointly fit on
+        # scenarios at MET~10.5, ~96 min. It has NOT been validated to
+        # generalise to very different effort levels or durations -- flag
+        # this explicitly rather than silently applying it everywhere,
+        # since a walker at MET~3 or a 4-hour event is well outside what
+        # was actually tested.
+        met_off = abs(met_value - 10.5) > 3.0
+        dur_off = abs(race_minutes - 96) > 60
+        st_module.metric(
+            "EHS estimate (primary: dose-response model)",
+            f"\u2248{dose_pct*10:.1f} per 1000",
+            help="A logistic curve over each simulated participant's "
+                 "cumulative T_rect/CO_reserve deficit (depth \u00d7 "
+                 "duration in the danger zone), fit jointly against "
+                 "Falmouth Road Race epidemiology (DeMartini et al. 2014) "
+                 "across 5 temperature scenarios. Refit 2026-08-10 after "
+                 "a clo_value correction (0.5->0.2) that fixed a major "
+                 "T_rect over-prediction; predicted/target ratio is now "
+                 "0.6-1.8x -- wider than the pre-fix 0.8-1.1x, because far "
+                 "fewer participants now enter the danger quadrant at all "
+                 "(as few as 0/120 at cooler temperatures), leaving less "
+                 "data to constrain the curve. Reflects THIS scenario's "
+                 "actual pace, duration and group -- unlike the "
+                 "temperature-only Falmouth estimate below, which cannot "
+                 "see any of that. EXPLORATORY: fit at n=120/scenario, "
+                 "well below the ~4,000-30,000 a production-scale fit "
+                 "would need -- treat with real caution.")
+        if met_off or dur_off:
+            st_module.warning(
+                "\u26a0\ufe0f This scenario (MET "
+                f"{met_value:.1f}, {race_minutes:.0f} min) falls outside "
+                "the range the dose-response curve was actually fit on "
+                "(MET\u224810.5, \u224896 min). It has NOT been validated to "
+                "generalise this far -- treat this number with extra "
+                "caution here, more so than usual."
+            )
+        note_parts = []
+        if falmouth_est is not None:
+            note_parts.append(
+                f"epidemiologically-calibrated estimate (Falmouth, "
+                f"temperature-only): \u2248{falmouth_est:.1f} per 1000"
+                + (f" at {mean_t:.1f}\u00b0C" if mean_t is not None else "")
+            )
+        raw_pct = quick.get("pct_true_ehs_criterion")
+        if raw_pct is not None:
+            note_parts.append(
+                f"raw HESTIA simulation (uncalibrated): "
+                f"{raw_pct:.1f}% (\u2248{raw_pct*10:.0f} per 1000)"
+            )
+        if note_parts:
+            st_module.caption("\u2139\ufe0f For comparison \u2014 " + "; ".join(note_parts) + ".")
 
     with st_module.expander("Raw physiological simulation (HESTIA, currently uncalibrated)"):
         st_module.warning(
@@ -642,12 +755,35 @@ def render_hestia_section(st_module, weather_df: pd.DataFrame, lat: float, lon: 
         if full is None:
             st_module.warning("Full-precision run failed to generate a population.")
         else:
+            full_falmouth = full.get("falmouth_ehs_per_1000")
+            quick_falmouth = quick.get("falmouth_ehs_per_1000")
+            if full_falmouth is not None:
+                st_module.metric(
+                    "EHS estimate (epidemiologically calibrated) \u2014 full precision",
+                    f"\u2248{full_falmouth:.1f} per 1000",
+                    delta=(f"{full_falmouth - quick_falmouth:+.1f} vs quick"
+                          if quick_falmouth is not None else None),
+                    help="Same Falmouth-based calibration as the quick estimate "
+                         "above (DeMartini et al. 2014) \u2014 shown again here "
+                         "because it depends only on ambient temperature, not "
+                         "on sample size, so it should barely move between "
+                         "quick and full precision. A large difference would "
+                         "itself be worth investigating.",
+                )
+                st_module.caption(
+                    "\u2139\ufe0f The figures below are HESTIA's own raw, "
+                    "uncalibrated physiological simulation (full precision), "
+                    "shown for comparison against the quick estimate \u2014 "
+                    "not the calibrated figure above."
+                )
+
             f1, f2, f3 = st_module.columns(3)
             f1.metric("Peak T_re, mean", f"{full['peak_t_rect_mean']:.1f}\u00b0C",
                       delta=f"{full['peak_t_rect_mean']-quick['peak_t_rect_mean']:+.1f} vs quick")
-            f2.metric("True EHS criterion met", f"{full['pct_true_ehs_criterion']:.1f}%",
+            f2.metric("True EHS criterion met (raw, uncalibrated)", f"{full['pct_true_ehs_criterion']:.1f}%",
                       delta=f"{full['pct_true_ehs_criterion']-quick['pct_true_ehs_criterion']:+.1f}pp vs quick",
-                      help="T_rect>=40.5\u00b0C AND CO_reserve<=0, simultaneously.")
+                      help="T_rect>=40.5\u00b0C AND CO_reserve<=0, simultaneously. "
+                           "Raw simulation output -- NOT the calibrated estimate above.")
             f3.metric("Worth monitoring (broad screen)", f"{full['pct_first_aid']:.1f}%",
                       delta=f"{full['pct_first_aid']-quick['pct_first_aid']:+.1f}pp vs quick",
                       help="Broad OR-based screen, not a calibrated incident rate.")

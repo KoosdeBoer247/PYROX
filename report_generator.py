@@ -18,7 +18,7 @@ what action to take, it doesn't belong in this report.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-09a"
+__BUILD__ = "2026-08-10b"
 
 import io
 from datetime import datetime
@@ -85,9 +85,12 @@ def _weather_chart(weather_df, exp_start, finish):
     reader who has seen both recognises them as the same data.
 
     Returns (png_bytes, plotted_labels) -- plotted_labels lists only the
-    variables that actually had data, so the caption can never claim a
-    line is shown when the underlying column was missing.
+    variables that actually had usable (non-all-NaN) data, so the caption
+    can never claim a line is shown when the underlying column was
+    missing or empty.
     """
+    import matplotlib.dates as mdates
+
     window = weather_df[
         (weather_df.index >= pd.Timestamp(exp_start) - pd.Timedelta(hours=6))
         & (weather_df.index <= finish + pd.Timedelta(hours=2))
@@ -95,37 +98,77 @@ def _weather_chart(weather_df, exp_start, finish):
     if window.empty or len(window) < 2:
         return None, []
 
-    fig, ax = plt.subplots(figsize=(6.4, 3.0))
+    fig, ax = plt.subplots(figsize=(6.8, 3.2))
     x = window.index.tz_localize(None) if window.index.tz is not None else window.index
     plotted = []
+    all_nan_vars = []
 
-    if "MRT" in window.columns:
-        ax.plot(x, window["MRT"], ":", color="#1f77b4", linewidth=1.4, label="MRT")
-        plotted.append("MRT")
-    if "T_air_urban" in window.columns:
-        ax.plot(x, window["T_air_urban"], "-", color="#ff7f0e", linewidth=1.6, label="T_air")
-        plotted.append("T_air")
-    if "UTCI" in window.columns:
-        ax.plot(x, window["UTCI"], "-", color="#9467bd", linewidth=1.6, label="UTCI")
-        plotted.append("UTCI")
-    if "WBGT" in window.columns:
-        ax.plot(x, window["WBGT"], "-", color="#d62728", linewidth=1.8, label="WBGT")
-        plotted.append("WBGT")
+    for col, style, colour, lw, label in [
+        ("MRT", ":", "#1f77b4", 1.4, "MRT"),
+        ("T_air_urban", "-", "#ff7f0e", 1.6, "T_air"),
+        ("UTCI", "-", "#9467bd", 1.6, "UTCI"),
+        ("WBGT", "-", "#d62728", 1.8, "WBGT"),
+    ]:
+        if col not in window.columns:
+            continue
+        y = window[col].to_numpy(dtype=float)
+        if np.all(np.isnan(y)):
+            # Present as a column but nothing usable in it -- do NOT feed
+            # an all-NaN series to ax.plot(): a line with no finite y
+            # values anywhere contributes no data to matplotlib's x-axis
+            # autoscale either (even though x itself is perfectly valid
+            # real timestamps), which is what caused the axis to fall
+            # back to a nonsensical multi-year default range instead of
+            # the real ~20-hour window. Skipping it here, and anchoring
+            # xlim explicitly below regardless, are both needed.
+            all_nan_vars.append(label)
+            continue
+        ax.plot(x, y, style, color=colour, linewidth=lw, label=label)
+        plotted.append(label)
 
-    if not plotted:
+    # Always anchor the x-axis to the real timestamp range, regardless of
+    # whether any y-data was plottable -- this is what actually prevents
+    # the multi-year fallback range, not just skipping all-NaN lines.
+    ax.set_xlim(x[0], x[-1])
+
+    if not plotted and not all_nan_vars:
         plt.close(fig)
         return None, []
 
     ax.axhspan(23, 28, color="#d62728", alpha=0.10, zorder=0)
     ax.axhspan(28, max(45, ax.get_ylim()[1]), color="#450a0a", alpha=0.22, zorder=0)
+
     start_naive = (pd.Timestamp(exp_start).tz_localize(None)
                    if pd.Timestamp(exp_start).tz is not None else pd.Timestamp(exp_start))
-    ax.axvline(start_naive, color="#1e293b", linestyle="--", linewidth=1)
-    ax.text(start_naive, ax.get_ylim()[1], " chosen start", fontsize=7,
-           va="top", color="#1e293b")
+    finish_naive = (pd.Timestamp(finish).tz_localize(None)
+                    if pd.Timestamp(finish).tz is not None else pd.Timestamp(finish))
+    y_min, y_top = ax.get_ylim()
+    label_y_finish = y_min + 0.90 * (y_top - y_min)
+    ax.axvline(start_naive, color="#1e293b", linestyle="--", linewidth=1.2)
+    ax.text(start_naive, y_top, f" start {start_naive.strftime('%H:%M')}", fontsize=7,
+           va="top", ha="left", color="#1e293b", fontweight="bold")
+    ax.axvline(finish_naive, color="#1e293b", linestyle=":", linewidth=1.2)
+    ax.text(finish_naive, label_y_finish, f" finish {finish_naive.strftime('%H:%M')} ", fontsize=7,
+           va="top", ha="left", color="#1e293b", fontweight="bold",
+           bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.75))
+
+    if all_nan_vars:
+        ax.text(0.5, 0.06, "No data: " + ", ".join(all_nan_vars),
+               transform=ax.transAxes, fontsize=7.5, ha="center", va="bottom",
+               color="#7f1d1d",
+               bbox=dict(boxstyle="round,pad=0.3", fc="#fee2e2", ec="#7f1d1d", alpha=0.85))
+
+    # Clear HH:MM tick labels, one per hour -- the earlier bare "06", "07"
+    # style (date-only ticks with the hour folded in) read ambiguously.
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=max(1, len(x) // 12)))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    # A single date label under the axis, since every tick now spells out
+    # the time only -- avoids repeating the date on every tick.
+    ax.set_xlabel(start_naive.strftime("%A %d %B %Y"), fontsize=8)
 
     ax.set_ylabel("\u00b0C", fontsize=9)
-    ax.legend(loc="upper left", fontsize=7, ncol=4, frameon=False)
+    if plotted:
+        ax.legend(loc="upper left", fontsize=7, ncol=4, frameon=False)
     ax.tick_params(labelsize=7)
     fig.autofmt_xdate()
     fig.tight_layout()
@@ -144,11 +187,33 @@ def _pyrox_multiday_chart(pyrox_result, label_for, exp_date):
 
     fig, ax = plt.subplots(figsize=(6.4, 2.6))
     colours = plt.cm.tab10.colors
+    any_data_plotted = False
+    all_nan_labels = []
     for i, (name, res) in enumerate(pyrox_result["groups"].items()):
         y = reserve_series(res)
         n = min(len(dates), len(y))
-        ax.plot(dates[:n], y[:n], "-o", markersize=2.5, linewidth=1.3,
-               color=colours[i % len(colours)], label=label_for.get(name, name))
+        y_slice = np.asarray(y[:n], dtype=float)
+        label = label_for.get(name, name)
+        if n == 0 or np.all(np.isnan(y_slice)):
+            # No plottable data for this group at all -- skip the line
+            # (plotting an all-NaN series contributes nothing to
+            # matplotlib's axis auto-scaling and, if EVERY group is like
+            # this, leaves it with no finite data anywhere to anchor to,
+            # which is what caused the axis to fall back to a
+            # nonsensical multi-year default range instead of the real
+            # dates). Track it to show a visible "no data" note instead
+            # of a silently blank chart.
+            all_nan_labels.append(label)
+            continue
+        any_data_plotted = True
+        ax.plot(dates[:n], y_slice, "-o", markersize=2.5, linewidth=1.3,
+               color=colours[i % len(colours)], label=label)
+
+    # Always anchor the x-axis to the real date range, regardless of
+    # whether any y-data was plottable -- this is what actually fixes
+    # the multi-year fallback range, not just skipping NaN lines above.
+    ax.set_xlim(dates[0], dates[-1])
+
     ax.axhspan(0, 25, color="#d62728", alpha=0.08, zorder=0)
     ax.axhspan(25, 50, color="#eab308", alpha=0.08, zorder=0)
     target = pd.Timestamp(exp_date)
@@ -157,7 +222,14 @@ def _pyrox_multiday_chart(pyrox_result, label_for, exp_date):
            ha="center", color="#1e293b")
     ax.set_ylim(0, 108)
     ax.set_ylabel("% reserve remaining", fontsize=9)
-    ax.legend(loc="lower left", fontsize=6.5, ncol=2, frameon=False)
+    if any_data_plotted:
+        ax.legend(loc="lower left", fontsize=6.5, ncol=2, frameon=False)
+    if all_nan_labels:
+        note = ("No data: " + ", ".join(all_nan_labels) if any_data_plotted
+                else "No data available for this period")
+        ax.text(0.5, 0.5, note, transform=ax.transAxes, fontsize=8,
+               ha="center", va="center", color="#7f1d1d",
+               bbox=dict(boxstyle="round,pad=0.3", fc="#fee2e2", ec="#7f1d1d", alpha=0.85))
     ax.tick_params(labelsize=7)
     fig.autofmt_xdate()
     fig.tight_layout()
@@ -328,9 +400,12 @@ def _add_weather_section(doc, weather_df, exp_start, finish):
     if chart is not None:
         doc.add_picture(chart, width=Cm(15.5))
         var_list = ", ".join(plotted[:-1]) + (" and " + plotted[-1] if len(plotted) > 1 else plotted[0])
-        _add_caption(doc, f"{var_list} over a wider window around the race. Shaded "
-                          "bands mark the red (23\u201328\u00b0C) and black (>28\u00b0C) "
-                          "WBGT flag zones.")
+        _add_caption(doc, f"{var_list}, hour by hour, from 2h before the chosen "
+                          "start to 1h after the estimated finish -- shown wider "
+                          "than the race itself so the trend leading in and out "
+                          "is visible. Dashed line = start, dotted line = "
+                          "estimated finish. Shaded bands mark the red "
+                          "(23\u201328\u00b0C) and black (>28\u00b0C) WBGT flag zones.")
         missing = [v for v in ("WBGT", "UTCI") if v not in plotted]
         if missing:
             _add_caption(doc, f"\u26a0\ufe0f {' and '.join(missing)} data was not "
@@ -339,8 +414,17 @@ def _add_weather_section(doc, weather_df, exp_start, finish):
 
 
 def _add_per_level_section(doc, per_level_exposure, pyrox_result, label_for,
-                           hestia_results, exp_date):
+                           hestia_results, exp_date, exp_start=None, finish=None,
+                           met_by_level_label=None, duration_by_level_label=None):
     from loop_view import reserve_series
+    met_by_level_label = met_by_level_label or {}
+    duration_by_level_label = duration_by_level_label or {}
+    # Fallback only: the shared report-wide finish, used solely when no
+    # per-level duration was supplied (e.g. older callers). Using this for
+    # every level is what caused the original bug -- each level normally
+    # has its own duration, which should always be preferred when present.
+    fallback_minutes = ((finish - exp_start).total_seconds() / 60.0
+                        if exp_start is not None and finish is not None else None)
     from decision_support import worst_flag, flag_display_name
 
     _add_heading(doc, "Per-level findings", level=1)
@@ -390,11 +474,27 @@ def _add_per_level_section(doc, per_level_exposure, pyrox_result, label_for,
             pinned = hestia.get("pct_vo2max_pinned")
             falmouth_est = hestia.get("falmouth_ehs_per_1000")
             mean_t = hestia.get("mean_t_air_race_window")
+            dose_pct = hestia.get("pct_dose_response_ehs")
+            level_met = met_by_level_label.get(level_label)
 
-            if falmouth_est is not None:
-                _row("EHS estimate (epidemiologically calibrated, see note below)",
-                     f"\u2248{falmouth_est:.1f} per 1000"
-                     + (f"  (race-window mean T_air {mean_t:.1f}\u00b0C)" if mean_t is not None else ""))
+            if dose_pct is not None:
+                _row("EHS estimate (primary: dose-response model, see note below)",
+                     f"\u2248{dose_pct*10:.1f} per 1000")
+                race_minutes = duration_by_level_label.get(level_label, fallback_minutes)
+                met_off = level_met is not None and abs(level_met - 10.5) > 3.0
+                dur_off = race_minutes is not None and abs(race_minutes - 96) > 60
+                if met_off or dur_off:
+                    warn = doc.add_paragraph()
+                    warn_run = warn.add_run(
+                        "\u26a0\ufe0f This level "
+                        + (f"(MET {level_met:.1f}, " if level_met is not None else "(")
+                        + (f"{race_minutes:.0f} min) " if race_minutes is not None else ") ")
+                        + "falls outside the range the dose-response curve was "
+                          "actually fit on (MET\u224810.5, \u224896 min). Not validated "
+                          "to generalise this far -- treat with extra caution."
+                    )
+                    warn_run.italic = True
+                    warn_run.font.color.rgb = RGBColor(0x7f, 0x1d, 0x1d)
 
             _row("HESTIA \u2014 peak T_re, mean", f"{hestia['peak_t_rect_mean']:.1f}\u00b0C")
             _row("HESTIA (raw, uncalibrated) \u2014 true EHS criterion met "
@@ -412,26 +512,40 @@ def _add_per_level_section(doc, per_level_exposure, pyrox_result, label_for,
                 _row("HESTIA \u2014 VO2max-pinning caution",
                      f"{pinned:.0f}% of the simulated population at effort ceiling")
 
-            if falmouth_est is not None:
+            if dose_pct is not None:
                 summary = doc.add_paragraph()
                 summary.add_run(
                     f"Per 1000 participants at this level, under these "
-                    f"conditions: \u2248{falmouth_est:.1f} are estimated to "
-                    f"experience exertional heat stroke, based on published "
-                    f"Falmouth Road Race epidemiology (DeMartini et al. "
-                    f"2014) regressed against this scenario's race-window "
-                    f"mean ambient temperature ({mean_t:.1f}\u00b0C)."
+                    f"conditions: \u2248{dose_pct*10:.1f} are estimated to "
+                    f"experience exertional heat stroke, from a "
+                    f"dose-response model over this scenario's actual "
+                    f"simulated pace, duration and group."
                 ).italic = True
-                _add_caption(doc, "This estimate is NOT derived from HESTIA's own "
-                                  "physiological simulation. Testing found that "
-                                  "simulation over-predicts this same real-world "
-                                  "benchmark by roughly 20-50x, so it is shown "
-                                  "separately above, clearly marked as raw/"
-                                  "uncalibrated, rather than corrected in place. "
-                                  "Limitation: the Falmouth regression (R\u00b2=0.65) "
-                                  "was fitted on one specific 7-mile race; applying "
-                                  "it to a different distance, duration, or "
-                                  "population is itself an approximation.")
+                note_parts = []
+                if falmouth_est is not None:
+                    note_parts.append(
+                        f"epidemiologically-calibrated estimate (Falmouth, "
+                        f"temperature-only, DeMartini et al. 2014): "
+                        f"\u2248{falmouth_est:.1f} per 1000"
+                        + (f" at {mean_t:.1f}\u00b0C" if mean_t is not None else "")
+                    )
+                note_parts.append(
+                    f"raw HESTIA simulation (uncalibrated): "
+                    f"{hestia['pct_true_ehs_criterion']:.1f}% "
+                    f"(\u2248{round(hestia['pct_true_ehs_criterion']*10):.0f} per 1000)"
+                )
+                _add_caption(doc, "For comparison \u2014 " + "; ".join(note_parts) + ". "
+                                  "The dose-response model is a logistic curve over "
+                                  "each participant's cumulative T_rect/CO_reserve "
+                                  "deficit (depth \u00d7 duration), fit jointly against "
+                                  "the Falmouth data across 5 temperature scenarios, "
+                                  "refit 2026-08-10 after a clo_value correction that "
+                                  "fixed a major T_rect over-prediction (predicted/"
+                                  "target ratio now 0.6-1.8x, wider than pre-fix, "
+                                  "because far fewer simulated participants now enter "
+                                  "the danger quadrant, leaving less data to fit). "
+                                  "EXPLORATORY: fit at n=120/scenario, well below "
+                                  "production scale.")
 
             dist_chart = _hestia_distribution_chart(
                 hestia.get("peak_t_rect_all", []), level_label)
@@ -538,7 +652,8 @@ def generate_report_docx(
     city_name: str, exp_start, weather_df: pd.DataFrame,
     per_level_exposure: dict, pyrox_result: dict, label_for: dict,
     hestia_results: dict, finish, flag_warnings: list, hestia_warnings: list,
-    tz_name: str, app_build: str,
+    tz_name: str, app_build: str, met_by_level_label: dict = None,
+    duration_by_level_label: dict = None,
 ) -> bytes:
     """Builds the report and returns it as bytes, ready for a Streamlit
     download_button. No file is written to disk."""
@@ -551,7 +666,9 @@ def generate_report_docx(
     _add_title_section(doc, city_name, exp_start, generated_at, app_build)
     _add_weather_section(doc, weather_df, exp_start, finish)
     _add_per_level_section(doc, per_level_exposure, pyrox_result, label_for,
-                           hestia_results, pd.Timestamp(exp_start).date())
+                           hestia_results, pd.Timestamp(exp_start).date(),
+                           exp_start, finish, met_by_level_label or {},
+                           duration_by_level_label or {})
     _add_divergence_section(doc, flag_warnings, hestia_warnings)
     _add_limitations_section(doc, hestia_results)
 
