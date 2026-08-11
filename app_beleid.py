@@ -41,7 +41,7 @@ from Thermopoulos_Data_Engine import (
     validate_weather_data,
 )
 from pyrox_bridge import met_from_pace
-from pyrox_groups import RUNNER_LEVELS, WALKER_LEVELS, LEVELS
+from pyrox_groups import WALKER_LEVELS, LEVELS
 from decision_support import exposure_by_flag, flag_display_name, flag_colour
 import hestia_bridge as hb
 from report_generator import (
@@ -49,7 +49,7 @@ from report_generator import (
     _co_reserve_distribution_chart, dose_evolution_chart,
 )
 
-APP_BUILD = "2026-08-11a (simplified policy/organiser view)"
+APP_BUILD = "2026-08-11c (recreational-only + progress bar)"
 
 
 # =============================================================================
@@ -166,14 +166,37 @@ with st.sidebar:
     forecast_days = st.slider("Forecast period (days)", 1, 16, 7)
 
     st.divider()
-    selected_runners = st.multiselect(
-        "Runner levels", options=list(RUNNER_LEVELS),
-        default=["Recreational runner"],
+    # Runner type is deliberately fixed to "Recreational runner" on this
+    # page -- the most relevant group for policymakers -- rather than the
+    # full runner-level multiselect app_athletes.py offers. Walker groups
+    # keep their full choice, since that variety (age, chronic conditions)
+    # is exactly what this audience needs to see.
+    include_recreational_runner = st.checkbox(
+        "Include recreational runner", value=True,
+        help="This page limits the runner category to 'Recreational "
+             "runner' -- the group most representative of a typical "
+             "event field. For the full range of runner levels "
+             "(beginner to elite), use the participants view.",
     )
+    selected_runners = ["Recreational runner"] if include_recreational_runner else []
     selected_walkers = st.multiselect(
         "Walker groups", options=list(WALKER_LEVELS), default=[],
     )
     selected_levels = selected_runners + selected_walkers
+
+    st.divider()
+    n_simulations = st.number_input(
+        "Number of simulations", min_value=20, max_value=1000,
+        value=100, step=20,
+        help="How many virtual participants the physiological model "
+             "simulates per level. More simulations give a more "
+             "statistically reliable estimate -- especially important "
+             "when the expected number of cases is small, where a low "
+             "count can otherwise look more or less serious than it "
+             "really is just by chance. Higher values take longer to "
+             "compute: a few seconds at 100, roughly a minute or more "
+             "as you approach 1000.",
+    )
 
     st.divider()
     run_button = st.button("\U0001F680 Run analysis", type="primary",
@@ -322,10 +345,18 @@ if st.session_state.results and selected_levels:
                 st.rerun()
             continue
 
-        with st.spinner(f"Running physiological simulation for {lvl}..."):
-            result = hb.run_quick_estimate(
+        progress = st.progress(0.0, text=f"Starting simulation for {lvl}...")
+
+        def _progress_cb(done, total):
+            progress.progress(done / total, text=f"{lvl}: {done}/{total} simulated participants...")
+
+        with st.spinner(f"Running physiological simulation for {lvl} "
+                        f"({n_simulations} simulations)..."):
+            result = hb.run_full_precision(
                 forecast_df, lat, lon, tz, exp_start, finish, met_value=met_value,
+                n_simulations=n_simulations, progress_callback=_progress_cb,
             )
+        progress.empty()
 
         if result is None:
             st.warning("Simulation did not return a usable result for this level.")
