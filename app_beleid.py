@@ -49,7 +49,7 @@ from report_generator import (
     _co_reserve_distribution_chart, dose_evolution_chart,
 )
 
-APP_BUILD = "2026-08-11c (recreational-only + progress bar)"
+APP_BUILD = "2026-08-11d (pace field legend restored)"
 
 
 # =============================================================================
@@ -215,10 +215,15 @@ if selected_levels:
         is_walk = LEVELS[lvl]["mode"] == "walk"
         with pace_cols[i % 3]:
             paces[lvl] = st.number_input(
-                lvl, min_value=6.0 if is_walk else 2.5,
+                f"{lvl} (min/km)", min_value=6.0 if is_walk else 2.5,
                 max_value=25.0 if is_walk else 12.0,
                 value=float(LEVELS[lvl]["pace"]), step=0.25 if is_walk else 0.05,
                 key=f"pace_{lvl}",
+                help="Pace in minutes per kilometre -- lower is faster. "
+                     "This sets how much metabolic heat this level "
+                     "produces during the event."
+                     + (" 12.0 min/km = 5 km/h." if is_walk else
+                       " 6.0 min/km = 10 km/h."),
             )
     session_km = st.number_input(
         "Race distance (km)", min_value=1.0, max_value=100.0,
