@@ -814,3 +814,80 @@ PAPER_PROTOTYPES = ('adults_18_45', 'elderly_65_85', 'very_elderly_85plus')
 def get_group(name: str) -> GroupParameters:
     """Look up a group by name, defaulting to the healthy-older prototype."""
     return TARGET_GROUPS.get(name, TARGET_GROUPS['elderly_65_85'])
+
+
+# =============================================================================
+# Athlete/walker level presets -- shared by app_athletes.py and any other
+# entry point (e.g. a simplified page) that needs the same pace/level menu.
+# Moved here (2026-08-11) from app_athletes.py specifically so it is not
+# duplicated -- two independently-edited copies of this table would risk
+# silently drifting apart over time.
+# =============================================================================
+RUNNER_LEVELS = {
+    "Beginner runner (untrained)": dict(
+        group="adults_18_45", pace=7.5, mode="run",
+        note="Untrained or newly active. No heat acclimatisation assumed.",
+    ),
+    "Recreational runner": dict(
+        group="recreational_athletes", pace=6.0, mode="run",
+        note="Runs regularly, a few times a week.",
+    ),
+    "Trained / endurance runner": dict(
+        group="endurance_athletes", pace=4.5, mode="run",
+        note="Structured training, competes at club level.",
+    ),
+    "Elite runner": dict(
+        group="elite_athletes", pace=3.25, mode="run",
+        note="High training volume and well-developed heat acclimatisation.",
+    ),
+}
+
+# Walking events draw a very different field from running events: older
+# participants, children, and people with chronic conditions who would never
+# enter a race. Those are exactly the groups PYROX was built around, and
+# three of them (adults_18_45, elderly_65_85, very_elderly_85plus) carry the
+# PUBLISHED parameterisation rather than the extrapolated one the athlete
+# groups use. Walking is also a better fit for the model itself: 2.5-4 MET
+# sits inside the range the heat-load coefficient was fitted on, and a
+# multi-hour walking day matches the shift length its weighting assumes.
+# Default speed 5 km/h (12.0 min/km) except where a slower pace is typical.
+WALKER_LEVELS = {
+    "Walker \u2014 adult (18-45)": dict(
+        group="adults_18_45", pace=12.0, mode="walk",
+        note="Healthy adult walker.",
+    ),
+    "Walker \u2014 middle-aged (45-65)": dict(
+        group="middle_aged_45_65", pace=12.5, mode="walk",
+        note="Healthy middle-aged walker.",
+    ),
+    "Walker \u2014 older adult (65-85)": dict(
+        group="elderly_65_85", pace=13.5, mode="walk",
+        note="Healthy older walker. Published PYROX parameters.",
+    ),
+    "Walker \u2014 vulnerable older adult (85+)": dict(
+        group="very_elderly_85plus", pace=15.0, mode="walk",
+        note="Frail older walker. Published PYROX parameters. Markedly "
+             "reduced thermoregulatory reserve.",
+    ),
+    "Walker \u2014 youth (10-18)": dict(
+        group="youth_10_18", pace=12.0, mode="walk",
+        note="Typical of school walking events.",
+    ),
+    "Walker \u2014 child (6-10)": dict(
+        group="children_6_10", pace=14.0, mode="walk",
+        note="Higher surface-area-to-mass ratio and less mature sweating "
+             "response than adults.",
+    ),
+    "Walker \u2014 cardiovascular disease": dict(
+        group="cardiovascular_disease", pace=14.0, mode="walk",
+        note="Reduced cardiac reserve limits the skin blood flow available "
+             "for heat loss.",
+    ),
+    "Walker \u2014 obesity": dict(
+        group="obesity", pace=14.0, mode="walk",
+        note="Greater metabolic heat production per distance and a lower "
+             "surface-area-to-mass ratio for dissipating it.",
+    ),
+}
+
+LEVELS = {**RUNNER_LEVELS, **WALKER_LEVELS}

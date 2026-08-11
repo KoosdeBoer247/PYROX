@@ -18,7 +18,7 @@ what action to take, it doesn't belong in this report.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-10b"
+__BUILD__ = "2026-08-11a"
 
 import io
 from datetime import datetime
@@ -270,6 +270,41 @@ def _co_reserve_distribution_chart(worst_co_reserve_all: list, level_label: str)
     ax.set_xlabel("Worst CO_reserve per simulated participant (L/min)", fontsize=8)
     ax.set_ylabel("count", fontsize=8)
     ax.tick_params(labelsize=7)
+    fig.tight_layout()
+    return _fig_to_png_bytes(fig)
+
+
+def dose_evolution_chart(representative_traces: list, level_label: str = ""):
+    """T_rect, CO_reserve, and cumulative dose over time for a small set
+    of representative participants (from hestia_bridge's
+    _select_representative_traces) -- shows HOW risk builds over the
+    race and post-finish window, not just the final tally. Shared
+    between the Word report and any live Streamlit page."""
+    if not representative_traces:
+        return None
+
+    colours = ["#2a9d8f", "#e9a942", "#c1121f"]
+    fig, axes = plt.subplots(3, 1, figsize=(7.2, 8.0), sharex=True)
+
+    for i, tr in enumerate(representative_traces):
+        colour = colours[i % len(colours)]
+        axes[0].plot(tr["min"], tr["t"], color=colour, label=tr["label"], linewidth=1.6)
+        axes[1].plot(tr["min"], tr["c"], color=colour, linewidth=1.6)
+        axes[2].plot(tr["min"], tr["dose"], color=colour, linewidth=1.6)
+
+    axes[0].axhline(40.5, color="#7f1d1d", linestyle="--", linewidth=1, alpha=0.7)
+    axes[0].text(0, 40.5, " 40.5\u00b0C", fontsize=7, va="bottom", color="#7f1d1d")
+    axes[0].set_ylabel("T_rect (\u00b0C)")
+    axes[0].legend(loc="upper left", fontsize=8, frameon=False)
+    title = "How risk builds over time" + (f" \u2014 {level_label}" if level_label else "")
+    axes[0].set_title(title)
+
+    axes[1].axhline(0, color="#7f1d1d", linestyle="--", linewidth=1, alpha=0.7)
+    axes[1].set_ylabel("CO_reserve (L/min)")
+
+    axes[2].set_ylabel("Cumulative dose Q\n(L/min-minutes)")
+    axes[2].set_xlabel("Minutes since start (race + post-finish)")
+
     fig.tight_layout()
     return _fig_to_png_bytes(fig)
 

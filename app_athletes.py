@@ -56,7 +56,7 @@ from plain_view import render_plain_view
 from experimental_risk import render_experimental_section
 from report_generator import generate_report_docx
 
-APP_BUILD = "2026-08-10b (dose-response refit post-clo-fix)"
+APP_BUILD = "2026-08-11a (added simplified policy view)"
 
 
 def prediction_record_excel_bytes(
@@ -168,74 +168,9 @@ def prediction_record_excel_bytes(
 # athlete groups are extrapolated); that is stated in the UI rather than hidden.
 # Default paces are typical race paces for each level over ~10-21 km.
 # -----------------------------------------------------------------------------
-RUNNER_LEVELS = {
-    "Beginner runner (untrained)": dict(
-        group="adults_18_45", pace=7.5, mode="run",
-        note="Untrained or newly active. No heat acclimatisation assumed.",
-    ),
-    "Recreational runner": dict(
-        group="recreational_athletes", pace=6.0, mode="run",
-        note="Runs regularly, a few times a week.",
-    ),
-    "Trained / endurance runner": dict(
-        group="endurance_athletes", pace=4.5, mode="run",
-        note="Structured training, competes at club level.",
-    ),
-    "Elite runner": dict(
-        group="elite_athletes", pace=3.25, mode="run",
-        note="High training volume and well-developed heat acclimatisation.",
-    ),
-}
-
-# Walking events draw a very different field from running events: older
-# participants, children, and people with chronic conditions who would never
-# enter a race. Those are exactly the groups PYROX was built around, and
-# three of them (adults_18_45, elderly_65_85, very_elderly_85plus) carry the
-# PUBLISHED parameterisation rather than the extrapolated one the athlete
-# groups use. Walking is also a better fit for the model itself: 2.5-4 MET
-# sits inside the range the heat-load coefficient was fitted on, and a
-# multi-hour walking day matches the shift length its weighting assumes.
-# Default speed 5 km/h (12.0 min/km) except where a slower pace is typical.
-WALKER_LEVELS = {
-    "Walker — adult (18-45)": dict(
-        group="adults_18_45", pace=12.0, mode="walk",
-        note="Healthy adult walker.",
-    ),
-    "Walker — middle-aged (45-65)": dict(
-        group="middle_aged_45_65", pace=12.5, mode="walk",
-        note="Healthy middle-aged walker.",
-    ),
-    "Walker — older adult (65-85)": dict(
-        group="elderly_65_85", pace=13.5, mode="walk",
-        note="Healthy older walker. Published PYROX parameters.",
-    ),
-    "Walker — vulnerable older adult (85+)": dict(
-        group="very_elderly_85plus", pace=15.0, mode="walk",
-        note="Frail older walker. Published PYROX parameters. Markedly "
-             "reduced thermoregulatory reserve.",
-    ),
-    "Walker — youth (10-18)": dict(
-        group="youth_10_18", pace=12.0, mode="walk",
-        note="Typical of school walking events.",
-    ),
-    "Walker — child (6-10)": dict(
-        group="children_6_10", pace=14.0, mode="walk",
-        note="Higher surface-area-to-mass ratio and less mature sweating "
-             "response than adults.",
-    ),
-    "Walker — cardiovascular disease": dict(
-        group="cardiovascular_disease", pace=14.0, mode="walk",
-        note="Reduced cardiac reserve limits the skin blood flow available "
-             "for heat loss.",
-    ),
-    "Walker — obesity": dict(
-        group="obesity", pace=14.0, mode="walk",
-        note="Greater metabolic heat production per distance and a lower "
-             "surface-area-to-mass ratio for dissipating it.",
-    ),
-}
-
-LEVELS = {**RUNNER_LEVELS, **WALKER_LEVELS}
+# Athlete/walker level presets moved to pyrox_groups.py (2026-08-11) so
+# they're shared with other entry points instead of duplicated.
+from pyrox_groups import RUNNER_LEVELS, WALKER_LEVELS, LEVELS
 
 
 class RateLimitError(Exception):

@@ -113,13 +113,28 @@ minuut, tijdens en vlak na déze specifieke race?"**
 Dit is het meest gedetailleerde onderdeel: een simulatie van honderden
 virtuele deelnemers, met echte cardiovasculaire fysiologie.
 
-**Het hoofdgetal: "EHS estimate (epidemiologically calibrated)".** Dit
-komt **niet** rechtstreeks uit HESTIA's eigen simulatie, maar uit een
-gepubliceerde regressie op 18 jaar echte Falmouth Road Race-incidenten
-(DeMartini et al. 2014), toegepast op de gemiddelde temperatuur tijdens
-jouw gekozen racevenster. Uitgebreid testen liet zien dat HESTIA's eigen
-ruwe simulatie deze werkelijke Falmouth-cijfers met een factor 20-50×
-overschat — vandaar dat dit gekalibreerde cijfer nu het hoofdgetal is.
+**Het hoofdgetal: "EHS estimate (primary: dose-response model)".** Dit
+komt uit een logistische curve over elke gesimuleerde deelnemer's
+cumulatieve T_rect/CO_reserve-tekort (diepte × tijd in het gevarenkwadrant),
+gefit tegen de gepubliceerde Falmouth Road Race-epidemiologie (DeMartini
+et al. 2014). Dit cijfer reflecteert het **eigen tempo, duur en niveau**
+van dit scenario — in tegenstelling tot de temperatuur-alleen-schatting
+hieronder, die dat niet kan zien.
+
+**Als vergelijking, direct eronder:** de epidemiologisch gekalibreerde
+schatting (Falmouth, alleen op temperatuur gebaseerd) en het ruwe,
+ongekalibreerde HESTIA-percentage. Beide zijn nuttig om te zien hoe de
+verschillende methoden zich tot elkaar verhouden, maar het hoofdgetal is
+leidend.
+
+**Belangrijke correctie, 2026-08-10:** een verkeerd ingevulde kledingisolatiewaarde
+(clo=0,5, alsof deelnemers lichte binnenkleding droegen) liet de ruwe
+simulatie structureel te heet lopen — tot 93% van een gesimuleerde groep
+boven de klinische EHS-drempel, tegen een handvol procent in
+werkelijkheid (Veltmeijer et al. 2014, Zevenheuvelenloop). Gecorrigeerd
+naar clo=0,2 (realistische hardloopkleding), gecheckt tegen zowel
+Veltmeijer als Falmouth. De ruwe simulatie is sindsdien veel
+geloofwaardiger, al blijft hij ongekalibreerd getoond.
 
 **De ruwe simulatiecijfers** staan nog steeds beschikbaar, in een
 uitklapbare sectie "Raw physiological simulation (uncalibrated)":
@@ -132,11 +147,20 @@ uitklapbare sectie "Raw physiological simulation (uncalibrated)":
 | Avg. cardiovascular capacity remaining | Hoeveel cardiovasculaire reserve een gemiddelde deelnemer overhoudt tijdens + 10 min na de finish |
 | Reached zero/negative capacity | % dat op enig moment tijdens/vlak na de race op nul of negatieve capaciteit komt |
 
-**Belangrijke beperking van het gekalibreerde hoofdgetal:** de
-Falmouth-regressie is gefit op één specifieke 11 km-race met een brede
-recreatieve-tot-elite deelnemersgroep (R²=0,65). Toepassen op een andere
-afstand, duur of deelnemersgroep is zelf ook een benadering, geen
-gevalideerde overdracht.
+**Belangrijke beperkingen van het hoofdgetal:**
+- De Falmouth-regressie waarop het dosis-responsmodel is gekalibreerd, is
+  gefit op één specifieke 11 km-race met een brede recreatieve-tot-elite
+  deelnemersgroep (R²=0,65). Toepassen op een andere afstand, duur of
+  deelnemersgroep is zelf ook een benadering.
+- Het dosis-responsmodel is gefit op een kleine steekproef (n=120 per
+  scenario) — en sinds de clo-fix zijn er per scenario nog minder
+  deelnemers die het gevarenkwadrant ooit raken, wat de fit losser maakt
+  (voorspelling/doel-verhouding nu 0,6-1,8×, breder dan voorheen). Dit is
+  een bekend, gedocumenteerd voorbehoud — geen instelling om zelf aan te
+  passen.
+- Als het gekozen tempo (MET) of de duur sterk afwijkt van waarop de
+  curve is gefit (MET≈10,5, ≈96 min), verschijnt een expliciete
+  waarschuwing in de app.
 
 **Twee waarschuwingen die je serieus moet nemen, en die de app ook zelf
 toont:**

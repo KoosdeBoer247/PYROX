@@ -4,9 +4,17 @@ Deze handleiding beschrijft hoe je dit project beheert zonder opnieuw in de
 valkuilen te lopen die we onderweg zijn tegengekomen. Elke waarschuwing hierin
 staat er omdat het één keer is misgegaan.
 
-Versie van deze set: **build 2026-08-06a**
+Versie van deze set: **build 2026-08-10b**
 Laatst geverifieerd: alle modules compileren, alle acceptatietests slagen,
 beide apps starten zonder fouten.
+
+**Sinds 2026-08-06a, kort:** een verkeerd ingevulde kledingisolatiewaarde
+(clo=0,5 -> 0,2) bleek de HESTIA-simulatie structureel te heet te laten
+lopen; gecorrigeerd en gecheckt tegen Veltmeijer et al. 2014 en Falmouth/
+DeMartini et al. 2014. Het HESTIA-hoofdgetal is sindsdien een dosis-
+responsmodel (logistische curve op cumulatief T_rect/CO_reserve-tekort),
+niet meer de temperatuur-alleen-Falmouth-schatting. Zie GEBRUIKSAANWIJZING.md
+paragraaf 3.6 voor de volledige uitleg.
 
 ---
 
@@ -168,7 +176,7 @@ meegekomen bij het uploaden.
 Onderin de zijbalk staat:
 
 ```
-Build 2026-08-06a (...)
+Build 2026-08-10b (...)
 ```
 
 **Zie je die regel niet**, dan draait de app op oude code — punt uit, geen

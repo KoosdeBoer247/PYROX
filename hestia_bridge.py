@@ -38,7 +38,7 @@ TWO FIXES CARRIED BY THIS BRIDGE (not by hestia_model.py's callers):
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-10b"
+__BUILD__ = "2026-08-11a"
 
 import multiprocessing
 import time
@@ -268,6 +268,53 @@ def cumulative_deficit_dose(res: list) -> float:
     return dose
 
 
+def participant_trace(res: list) -> dict:
+    """Full per-timestep trace for one simulated participant: T_rect,
+    CO_reserve, cumulative deficit dose, and minutes since start (race +
+    post-finish). Used for the dose-evolution visualisation -- shows HOW
+    a participant's risk builds over time, not just the final tally.
+    """
+    t_series, c_series, dose_series, minutes = [], [], [], []
+    cum_dose = 0.0
+    for i, r in enumerate(res):
+        t, c = r.get("t_rect"), r.get("co_reserve")
+        if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
+            if t >= 40.5 and c <= 0:
+                cum_dose += abs(c) * 10.0
+            t_series.append(float(t)); c_series.append(float(c))
+            dose_series.append(cum_dose); minutes.append(i * 10.0)
+    pf_t = res[-1].get("t_rect_series_postfinish") or []
+    pf_c = res[-1].get("co_reserve_series_postfinish") or []
+    last_min = minutes[-1] if minutes else 0.0
+    for j, (t, c) in enumerate(zip(pf_t, pf_c)):
+        if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
+            if t >= 40.5 and c <= 0:
+                cum_dose += abs(c) * 0.5
+            t_series.append(float(t)); c_series.append(float(c))
+            dose_series.append(cum_dose); minutes.append(last_min + j * 0.5)
+    return {"t": t_series, "c": c_series, "dose": dose_series, "min": minutes,
+           "final_dose": cum_dose}
+
+
+def _select_representative_traces(all_results: list, doses: np.ndarray) -> list:
+    """Picks up to 3 illustrative participants -- lowest (usually 0),
+    median non-zero, and highest dose -- for the dose-evolution chart.
+    Returns [] if every participant has zero dose (nothing to contrast)."""
+    order = np.argsort(doses)
+    nonzero = [i for i in order if doses[i] > 0]
+    if not nonzero:
+        return []
+    idx_high = order[-1]
+    idx_mid = nonzero[len(nonzero) // 2]
+    idx_zero = next((i for i in order if doses[i] == 0), None)
+    picks = []
+    for idx, label in ([(idx_zero, "Lowest risk (dose=0)")] if idx_zero is not None else []) + [
+        (idx_mid, "Median non-zero dose"), (idx_high, "Highest dose"),
+    ]:
+        picks.append({"label": label, **participant_trace(all_results[idx])})
+    return picks
+
+
 def dose_response_ehs_probability(dose: float) -> float:
     """Maps a cumulative deficit dose to an estimated EHS probability via
     the jointly-fit logistic curve. See _DOSE_RESPONSE_A/B docstring for
@@ -337,6 +384,7 @@ def _summarize_results(all_results: list) -> dict:
     true_ehs = np.array(true_ehs)
     doses = np.array(doses)
     dose_response_pct = float(100.0 * np.mean(dose_response_ehs_probability(doses)))
+    representative_traces = _select_representative_traces(all_results, doses)
 
     # CO_reserve: "how much capacity is lost during and shortly after the
     # race", and "% reaching zero/negative capacity". Baseline = first
@@ -380,6 +428,7 @@ def _summarize_results(all_results: list) -> dict:
         "n_with_valid_co_reserve": int(np.sum(valid)),
         "pct_dose_response_ehs": dose_response_pct,
         "cumulative_doses_all": doses.tolist(),
+        "representative_traces": representative_traces,
         "worst_co_reserve_all": worst_co.tolist(),
         "t_rect_co_reserve_pairs": t_rect_co_reserve_pairs,
     }
