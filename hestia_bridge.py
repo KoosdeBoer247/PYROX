@@ -38,7 +38,7 @@ TWO FIXES CARRIED BY THIS BRIDGE (not by hestia_model.py's callers):
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-11h"
+__BUILD__ = "2026-08-12a"
 
 import multiprocessing
 import time
@@ -273,86 +273,137 @@ def participant_trace(res: list) -> dict:
     CO_reserve, cumulative deficit dose, and minutes since start (race +
     post-finish). Used for the dose-evolution visualisation -- shows HOW
     a participant's risk builds over time, not just the final tally.
+
+    Also exposes the race/post-finish split directly (race_* vs
+    pf_*_since_finish) -- needed because participants can stop at very
+    different absolute times (a known, separately-tracked simulation
+    behaviour), so aligning post-finish data by "minutes since start"
+    would otherwise mix a still-racing participant's data with an
+    already-recovering one's at the same nominal time. See
+    _population_median_trace() for why this matters.
     """
     t_series, c_series, dose_series, minutes = [], [], [], []
+    race_min, race_t, race_c, race_dose = [], [], [], []
     cum_dose = 0.0
     for i, r in enumerate(res):
         t, c = r.get("t_rect"), r.get("co_reserve")
         if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
             if t >= 40.5 and c <= 0:
                 cum_dose += abs(c) * 10.0
+            m = i * 10.0
             t_series.append(float(t)); c_series.append(float(c))
-            dose_series.append(cum_dose); minutes.append(i * 10.0)
+            dose_series.append(cum_dose); minutes.append(m)
+            race_min.append(m); race_t.append(float(t))
+            race_c.append(float(c)); race_dose.append(cum_dose)
     pf_t = res[-1].get("t_rect_series_postfinish") or []
     pf_c = res[-1].get("co_reserve_series_postfinish") or []
     last_min = minutes[-1] if minutes else 0.0
+    pf_min_since_finish, pf_t_vals, pf_c_vals, pf_dose_vals = [], [], [], []
     for j, (t, c) in enumerate(zip(pf_t, pf_c)):
         if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
             if t >= 40.5 and c <= 0:
                 cum_dose += abs(c) * 0.5
             t_series.append(float(t)); c_series.append(float(c))
             dose_series.append(cum_dose); minutes.append(last_min + j * 0.5)
+            pf_min_since_finish.append(j * 0.5)
+            pf_t_vals.append(float(t)); pf_c_vals.append(float(c))
+            pf_dose_vals.append(cum_dose)
     return {"t": t_series, "c": c_series, "dose": dose_series, "min": minutes,
-           "final_dose": cum_dose, "stopped_at": last_min}
+           "final_dose": cum_dose, "stopped_at": last_min,
+           "race_min": race_min, "race_t": race_t, "race_c": race_c, "race_dose": race_dose,
+           "pf_min_since_finish": pf_min_since_finish, "pf_t": pf_t_vals,
+           "pf_c": pf_c_vals, "pf_dose": pf_dose_vals}
 
 
 def _population_median_trace(all_results: list) -> dict:
-    """Point-by-point population median T_rect/CO_reserve/dose, computed
-    across ALL participants at each shared time bucket -- not one
-    'representative' individual, but the actual median value at every
-    point in time. Always computable, even when every participant's
-    final dose is zero (e.g. most walker scenarios), which is exactly
-    when a single illustrative trace would have nothing to show.
+    """Point-by-point population median T_rect/CO_reserve/dose. Always
+    computable, even when every participant's final dose is zero (e.g.
+    most walker scenarios), which is exactly when a single illustrative
+    trace would have nothing to show.
 
-    Time buckets are keyed by the same minute markers participant_trace()
-    already uses (10-min race steps, ~0.5-min post-finish steps), so
-    traces of different lengths (some participants' race-phase data ends
-    earlier than others -- a known, separately-tracked simulation
-    behaviour) still align correctly: each bucket's median only uses
-    the participants who actually have a value there.
+    [fix, 2026-08-12] Race-phase and post-finish data are now aligned
+    SEPARATELY -- race-phase by absolute minutes since start (everyone
+    starts together, so this is correct), post-finish by minutes since
+    EACH participant's OWN finish (since people finish at very different
+    absolute times). The earlier version aligned everything by absolute
+    minutes since start throughout, which meant that at a given nominal
+    time, some participants' still-racing data got averaged together
+    with other participants' already-recovering post-finish data --
+    producing a median that swung between the two nonsensically (visible
+    as a sawtooth pattern in T_rect that rose and fell repeatedly, which
+    cannot happen for a real physiological trajectory). The post-finish
+    segment is now offset to start at the population's median stop time,
+    for visual continuity with the race-phase segment.
     """
     from collections import defaultdict
-    t_by_min, c_by_min, dose_by_min = defaultdict(list), defaultdict(list), defaultdict(list)
+    race_t_by_min, race_c_by_min, race_dose_by_min = (defaultdict(list), defaultdict(list),
+                                                       defaultdict(list))
+    pf_t_by_min, pf_c_by_min, pf_dose_by_min = (defaultdict(list), defaultdict(list),
+                                                defaultdict(list))
     stop_times = []
     for res in all_results:
         tr = participant_trace(res)
         stop_times.append(tr["stopped_at"])
-        for m, t, c, d in zip(tr["min"], tr["t"], tr["c"], tr["dose"]):
-            t_by_min[m].append(t)
-            c_by_min[m].append(c)
-            dose_by_min[m].append(d)
-    minutes = sorted(t_by_min)
+        for m, t, c, d in zip(tr["race_min"], tr["race_t"], tr["race_c"], tr["race_dose"]):
+            race_t_by_min[m].append(t); race_c_by_min[m].append(c); race_dose_by_min[m].append(d)
+        for m, t, c, d in zip(tr["pf_min_since_finish"], tr["pf_t"], tr["pf_c"], tr["pf_dose"]):
+            pf_t_by_min[m].append(t); pf_c_by_min[m].append(c); pf_dose_by_min[m].append(d)
+
+    median_stop = float(np.median(stop_times)) if stop_times else 0.0
+    race_minutes = sorted(race_t_by_min)
+    pf_minutes = sorted(pf_t_by_min)
+
+    minutes = list(race_minutes) + [median_stop + m for m in pf_minutes]
+    t_vals = [float(np.median(race_t_by_min[m])) for m in race_minutes] + \
+             [float(np.median(pf_t_by_min[m])) for m in pf_minutes]
+    c_vals = [float(np.median(race_c_by_min[m])) for m in race_minutes] + \
+             [float(np.median(pf_c_by_min[m])) for m in pf_minutes]
+    dose_vals = [float(np.median(race_dose_by_min[m])) for m in race_minutes] + \
+                [float(np.median(pf_dose_by_min[m])) for m in pf_minutes]
+
     return {
         "label": "Population median",
-        "min": minutes,
-        "stopped_at": float(np.median(stop_times)) if stop_times else 0.0,
-        "t": [float(np.median(t_by_min[m])) for m in minutes],
-        "c": [float(np.median(c_by_min[m])) for m in minutes],
-        "dose": [float(np.median(dose_by_min[m])) for m in minutes],
-        "final_dose": float(np.median(dose_by_min[minutes[-1]])) if minutes else 0.0,
+        "min": minutes, "stopped_at": median_stop,
+        "t": t_vals, "c": c_vals, "dose": dose_vals,
+        "final_dose": dose_vals[-1] if dose_vals else 0.0,
     }
 
 
 def _select_representative_traces(all_results: list, doses: np.ndarray) -> list:
     """Population median (always present) plus up to 3 illustrative
-    individual participants -- lowest (usually 0), median non-zero, and
-    highest dose -- for the dose-evolution chart. The median alone still
-    renders something informative (e.g. 'everyone stayed safe') even
-    when no individual ever crosses the danger threshold, which used to
-    make this return [] and suppress the chart entirely -- a real gap
-    for low-MET scenarios (walkers) where that is the common case.
+    individual participants, for the dose-evolution chart.
+
+    When at least one participant has a non-zero dose, the three picks
+    are lowest (usually 0), median non-zero, and highest dose -- showing
+    the spread of risk. When EVERY participant has zero dose (a common,
+    unremarkable case for walkers), that basis doesn't distinguish
+    anyone, so the picks fall back to spanning the peak T_rect range
+    (lowest/median/highest) instead -- so the chart still shows more
+    than a single flat median line, illustrating that even the hottest
+    individual stayed under the danger threshold.
     """
     picks = [_population_median_trace(all_results)]
     order = np.argsort(doses)
     nonzero = [i for i in order if doses[i] > 0]
-    if not nonzero:
+
+    if nonzero:
+        idx_high = order[-1]
+        idx_mid = nonzero[len(nonzero) // 2]
+        idx_zero = next((i for i in order if doses[i] == 0), None)
+        for idx, label in ([(idx_zero, "Lowest risk (dose=0)")] if idx_zero is not None else []) + [
+            (idx_mid, "Median non-zero dose"), (idx_high, "Highest dose"),
+        ]:
+            picks.append({"label": label, **participant_trace(all_results[idx])})
         return picks
-    idx_high = order[-1]
-    idx_mid = nonzero[len(nonzero) // 2]
-    idx_zero = next((i for i in order if doses[i] == 0), None)
-    for idx, label in ([(idx_zero, "Lowest risk (dose=0)")] if idx_zero is not None else []) + [
-        (idx_mid, "Median non-zero dose"), (idx_high, "Highest dose"),
-    ]:
+
+    # Every dose is zero -- fall back to spanning peak T_rect instead,
+    # so the chart still shows individual spread, not just the median.
+    peak_t = np.array([max(r.get("t_rect", 0.0) for r in res if r.get("t_rect") is not None)
+                       for res in all_results])
+    t_order = np.argsort(peak_t)
+    for idx, label in [(t_order[0], "Coolest participant"),
+                       (t_order[len(t_order) // 2], "Median participant"),
+                       (t_order[-1], "Hottest participant")]:
         picks.append({"label": label, **participant_trace(all_results[idx])})
     return picks
 

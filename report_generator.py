@@ -18,7 +18,7 @@ what action to take, it doesn't belong in this report.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-11h"
+__BUILD__ = "2026-08-12a"
 
 import io
 from datetime import datetime

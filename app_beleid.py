@@ -49,7 +49,7 @@ from report_generator import (
     _co_reserve_distribution_chart, dose_evolution_chart,
 )
 
-APP_BUILD = "2026-08-11h (stop-time markers in dose charts)"
+APP_BUILD = "2026-08-12c (terrain labels translated to English)"
 
 
 # =============================================================================
@@ -155,11 +155,23 @@ with st.sidebar:
     st.header("Location & levels")
     city_name = st.text_input("City", placeholder="e.g. Zaandam")
 
-    terrain_options = {k: v[0] for k, v in ROUGHNESS_Z0_TERRAIN.items()}
+    # English labels for this page only -- ROUGHNESS_Z0_TERRAIN itself
+    # (Thermopoulos_Data_Engine.py) stays in Dutch since it's shared with
+    # app.py/app_athletes.py, which keep their Dutch interface. Same
+    # keys, so the underlying roughness values are unaffected.
+    TERRAIN_LABELS_EN = {
+        "1": "Open water / sea",
+        "2": "Open coast, beach, short grass (few obstacles)",
+        "3": "Open agricultural land, scattered obstacles",
+        "4": "Parkland / scattered buildings, trees",
+        "5": "Suburban (low-rise buildings, gardens, trees)",
+        "6": "Urban / city centre (tall, dense buildings)",
+    }
     terrain_key = st.selectbox(
         "Terrain type (10m \u2192 1.5m wind profile)",
-        options=list(terrain_options.keys()),
-        format_func=lambda k: terrain_options[k], index=2,
+        options=list(ROUGHNESS_Z0_TERRAIN.keys()),
+        format_func=lambda k: TERRAIN_LABELS_EN.get(k, ROUGHNESS_Z0_TERRAIN[k][0]),
+        index=2,
     )
     roughness_z0 = ROUGHNESS_Z0_TERRAIN[terrain_key][1]
 
@@ -418,7 +430,15 @@ if st.session_state.results and selected_levels:
                                       "participant, every timestep. Shaded "
                                       "quadrant = the true EHS criterion.")
 
-        traces = result.get("representative_traces", [])
+        # The population median trace is deliberately excluded here --
+        # for this non-expert audience it risks reading as "this is what
+        # happens", when it's a point-by-point statistical aggregate
+        # that no single real participant actually experiences. The
+        # individual example lines (or, when every dose is zero, the
+        # coolest/median/hottest-by-T_rect fallback) are more directly
+        # interpretable on their own.
+        traces = [tr for tr in result.get("representative_traces", [])
+                 if tr.get("label") != "Population median"]
         dose_chart = dose_evolution_chart(traces, lvl) if traces else None
         if dose_chart is not None:
             chart_cols[1].image(dose_chart.getvalue(),
