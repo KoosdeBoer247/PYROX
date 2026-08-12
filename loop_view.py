@@ -36,7 +36,7 @@ extrapolated rather than published.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-11a"
+__BUILD__ = "2026-08-11h"
 
 import numpy as np
 import pandas as pd

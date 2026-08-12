@@ -18,7 +18,7 @@ what action to take, it doesn't belong in this report.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-11a"
+__BUILD__ = "2026-08-11h"
 
 import io
 from datetime import datetime
@@ -275,22 +275,40 @@ def _co_reserve_distribution_chart(worst_co_reserve_all: list, level_label: str)
 
 
 def dose_evolution_chart(representative_traces: list, level_label: str = ""):
-    """T_rect, CO_reserve, and cumulative dose over time for a small set
-    of representative participants (from hestia_bridge's
-    _select_representative_traces) -- shows HOW risk builds over the
-    race and post-finish window, not just the final tally. Shared
+    """T_rect, CO_reserve, and cumulative dose over time. First trace
+    (from hestia_bridge's _select_representative_traces) is always the
+    real population median, computed point-by-point across every
+    simulated participant -- shown distinctly (thick black dashed line)
+    from the up-to-3 illustrative individual examples that follow it.
+    A thin, colour-matched dotted vertical line marks each trace's own
+    stop/finish time -- these genuinely differ between participants
+    (faster/slower pacing), which is also where the sharp post-finish
+    CO_reserve recovery in the CO_reserve panel comes from. Shared
     between the Word report and any live Streamlit page."""
     if not representative_traces:
         return None
 
-    colours = ["#2a9d8f", "#e9a942", "#c1121f"]
+    individual_colours = ["#2a9d8f", "#e9a942", "#c1121f"]
     fig, axes = plt.subplots(3, 1, figsize=(7.2, 8.0), sharex=True)
 
-    for i, tr in enumerate(representative_traces):
-        colour = colours[i % len(colours)]
-        axes[0].plot(tr["min"], tr["t"], color=colour, label=tr["label"], linewidth=1.6)
-        axes[1].plot(tr["min"], tr["c"], color=colour, linewidth=1.6)
-        axes[2].plot(tr["min"], tr["dose"], color=colour, linewidth=1.6)
+    individual_i = 0
+    stop_markers = []  # (colour, stopped_at) pairs, drawn after the main lines
+    for tr in representative_traces:
+        if tr["label"] == "Population median":
+            style = dict(color="#1e293b", linestyle="--", linewidth=2.2, zorder=5)
+        else:
+            style = dict(color=individual_colours[individual_i % len(individual_colours)],
+                        linewidth=1.4, alpha=0.85)
+            individual_i += 1
+        axes[0].plot(tr["min"], tr["t"], label=tr["label"], **style)
+        axes[1].plot(tr["min"], tr["c"], **style)
+        axes[2].plot(tr["min"], tr["dose"], **style)
+        if tr.get("stopped_at"):
+            stop_markers.append((style["color"], tr["stopped_at"]))
+
+    for colour, stopped_at in stop_markers:
+        for ax in axes:
+            ax.axvline(stopped_at, color=colour, linestyle=":", linewidth=1.1, alpha=0.55)
 
     axes[0].axhline(40.5, color="#7f1d1d", linestyle="--", linewidth=1, alpha=0.7)
     axes[0].text(0, 40.5, " 40.5\u00b0C", fontsize=7, va="bottom", color="#7f1d1d")
@@ -304,6 +322,8 @@ def dose_evolution_chart(representative_traces: list, level_label: str = ""):
 
     axes[2].set_ylabel("Cumulative dose Q\n(L/min-minutes)")
     axes[2].set_xlabel("Minutes since start (race + post-finish)")
+    axes[2].text(0.5, -0.32, "Dotted vertical lines: each line's own stop/finish time",
+                fontsize=7, color="#475569", ha="center", transform=axes[2].transAxes)
 
     fig.tight_layout()
     return _fig_to_png_bytes(fig)

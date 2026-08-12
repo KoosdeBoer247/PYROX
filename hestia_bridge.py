@@ -38,7 +38,7 @@ TWO FIXES CARRIED BY THIS BRIDGE (not by hestia_model.py's callers):
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-11a"
+__BUILD__ = "2026-08-11h"
 
 import multiprocessing
 import time
@@ -293,21 +293,63 @@ def participant_trace(res: list) -> dict:
             t_series.append(float(t)); c_series.append(float(c))
             dose_series.append(cum_dose); minutes.append(last_min + j * 0.5)
     return {"t": t_series, "c": c_series, "dose": dose_series, "min": minutes,
-           "final_dose": cum_dose}
+           "final_dose": cum_dose, "stopped_at": last_min}
+
+
+def _population_median_trace(all_results: list) -> dict:
+    """Point-by-point population median T_rect/CO_reserve/dose, computed
+    across ALL participants at each shared time bucket -- not one
+    'representative' individual, but the actual median value at every
+    point in time. Always computable, even when every participant's
+    final dose is zero (e.g. most walker scenarios), which is exactly
+    when a single illustrative trace would have nothing to show.
+
+    Time buckets are keyed by the same minute markers participant_trace()
+    already uses (10-min race steps, ~0.5-min post-finish steps), so
+    traces of different lengths (some participants' race-phase data ends
+    earlier than others -- a known, separately-tracked simulation
+    behaviour) still align correctly: each bucket's median only uses
+    the participants who actually have a value there.
+    """
+    from collections import defaultdict
+    t_by_min, c_by_min, dose_by_min = defaultdict(list), defaultdict(list), defaultdict(list)
+    stop_times = []
+    for res in all_results:
+        tr = participant_trace(res)
+        stop_times.append(tr["stopped_at"])
+        for m, t, c, d in zip(tr["min"], tr["t"], tr["c"], tr["dose"]):
+            t_by_min[m].append(t)
+            c_by_min[m].append(c)
+            dose_by_min[m].append(d)
+    minutes = sorted(t_by_min)
+    return {
+        "label": "Population median",
+        "min": minutes,
+        "stopped_at": float(np.median(stop_times)) if stop_times else 0.0,
+        "t": [float(np.median(t_by_min[m])) for m in minutes],
+        "c": [float(np.median(c_by_min[m])) for m in minutes],
+        "dose": [float(np.median(dose_by_min[m])) for m in minutes],
+        "final_dose": float(np.median(dose_by_min[minutes[-1]])) if minutes else 0.0,
+    }
 
 
 def _select_representative_traces(all_results: list, doses: np.ndarray) -> list:
-    """Picks up to 3 illustrative participants -- lowest (usually 0),
-    median non-zero, and highest dose -- for the dose-evolution chart.
-    Returns [] if every participant has zero dose (nothing to contrast)."""
+    """Population median (always present) plus up to 3 illustrative
+    individual participants -- lowest (usually 0), median non-zero, and
+    highest dose -- for the dose-evolution chart. The median alone still
+    renders something informative (e.g. 'everyone stayed safe') even
+    when no individual ever crosses the danger threshold, which used to
+    make this return [] and suppress the chart entirely -- a real gap
+    for low-MET scenarios (walkers) where that is the common case.
+    """
+    picks = [_population_median_trace(all_results)]
     order = np.argsort(doses)
     nonzero = [i for i in order if doses[i] > 0]
     if not nonzero:
-        return []
+        return picks
     idx_high = order[-1]
     idx_mid = nonzero[len(nonzero) // 2]
     idx_zero = next((i for i in order if doses[i] == 0), None)
-    picks = []
     for idx, label in ([(idx_zero, "Lowest risk (dose=0)")] if idx_zero is not None else []) + [
         (idx_mid, "Median non-zero dose"), (idx_high, "Highest dose"),
     ]:

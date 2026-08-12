@@ -56,7 +56,7 @@ from plain_view import render_plain_view
 from experimental_risk import render_experimental_section
 from report_generator import generate_report_docx
 
-APP_BUILD = "2026-08-11a (added simplified policy view)"
+APP_BUILD = "2026-08-11h (stop-time markers in dose charts)"
 
 
 def prediction_record_excel_bytes(

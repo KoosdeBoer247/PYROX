@@ -49,7 +49,7 @@ from terrain_lookup import fetch_landcover_along_route, RASTERIO_AVAILABLE
 # terrain_lookup.py change. Shown in the sidebar so the running version is
 # visible at a glance -- guessing which code is deployed from a traceback
 # wastes far more time than displaying it.
-APP_BUILD = "2026-08-11a (added simplified policy view)"
+APP_BUILD = "2026-08-11h (stop-time markers in dose charts)"
 from pyrox_revised_calibration import (
     apply_revised_calibration,
     default_met,

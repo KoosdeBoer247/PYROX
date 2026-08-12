@@ -49,7 +49,7 @@ from report_generator import (
     _co_reserve_distribution_chart, dose_evolution_chart,
 )
 
-APP_BUILD = "2026-08-11d (pace field legend restored)"
+APP_BUILD = "2026-08-11h (stop-time markers in dose charts)"
 
 
 # =============================================================================
@@ -333,6 +333,17 @@ if st.session_state.results and selected_levels:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, font=dict(size=10)),
     )
     st.plotly_chart(fig_exp, use_container_width=True)
+    st.caption(
+        "\u2139\ufe0f This chart is based on WBGT (Wet Bulb Globe Temperature), "
+        "an instantaneous measure of ambient heat stress at each hour -- "
+        "it does not account for cumulative physiological strain over "
+        "the course of the event, individual differences in fitness or "
+        "hydration, or the elevated risk immediately after finishing. "
+        "The EHS estimate below, from the full physiological simulation, "
+        "can therefore show meaningfully higher risk than the WBGT flag "
+        "colours alone would suggest -- treat WBGT as a same-hour "
+        "ambient-conditions indicator, not as the full risk picture."
+    )
 
     # ---- HESTIA per level ----------------------------------------------
     st.divider()
@@ -369,6 +380,7 @@ if st.session_state.results and selected_levels:
 
         dose_pct = result.get("pct_dose_response_ehs")
         falmouth_est = result.get("falmouth_ehs_per_1000")
+        mean_t = result.get("mean_t_air_race_window")
         if dose_pct is not None:
             c1, c2 = st.columns(2)
             c1.metric(
@@ -377,10 +389,25 @@ if st.session_state.results and selected_levels:
                      "duration and simulated physiology, calibrated against "
                      "Falmouth Road Race epidemiology (DeMartini et al. "
                      "2014). EXPLORATORY calibration -- see the participants "
-                     "view for full methodology and caveats.")
+                     "view for full methodology and caveats. This is the "
+                     "number to use.")
             if falmouth_est is not None:
-                c2.metric("For comparison (temperature-only)",
-                         f"\u2248{falmouth_est:.1f} per 1000")
+                c2.metric(
+                    "Alternative estimate (temperature only)",
+                    f"\u2248{falmouth_est:.1f} per 1000",
+                    help="A second, independent estimate from real "
+                         "Falmouth Road Race incident records (DeMartini "
+                         "et al. 2014), based ONLY on today's ambient "
+                         "temperature"
+                         + (f" ({mean_t:.1f}\u00b0C)" if mean_t is not None else "")
+                         + " -- unlike the number on the left, it cannot "
+                           "see this level's actual pace, distance, or "
+                           "group, so it will not move if you change "
+                           "those. Shown as a cross-check, not as the "
+                           "figure to act on: two independent methods "
+                           "landing in the same range is reassuring, but "
+                           "a difference between them does not mean "
+                           "either one is wrong.")
 
         chart_cols = st.columns(2)
         pairs = result.get("t_rect_co_reserve_pairs", [])
