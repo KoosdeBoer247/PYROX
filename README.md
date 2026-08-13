@@ -1,8 +1,22 @@
 # PYROX — heat-risk web app
 
 An interactive web interface over the Thermopoulos Data Engine (weather
-acquisition and thermal-index processing) and PYROX (population-tier
-heat-strain model).
+acquisition and thermal-index processing), PYROX (population-tier
+heat-strain model), and HESTIA (individual-tier cardiovascular Monte Carlo
+model). Three Streamlit front-ends share the same modules:
+
+| App | Entry point | Audience |
+|---|---|---|
+| PYROX | `app.py` | General population, occupational groups, policy |
+| PYROX Participants | `app_athletes.py` | Runners and walkers, event organisers — full methodology |
+| PYROX Beleid | `app_beleid.py` | Policymakers/organisers who need one race's headline result, without the research-level caveats |
+
+This document covers the **PYROX population-tier scope** in depth (it
+predates the HESTIA integration below and the third app, and keeps that
+narrower focus deliberately — see "Why the calibration was revised"). For
+the HESTIA individual tier, the clo/hydration/dose-response fixes, and
+day-to-day usage of all three apps, see `GEBRUIKSAANWIJZING.md`. For
+GitHub/Streamlit deployment of all three apps, see `HANDLEIDING.md`.
 
 ---
 
@@ -47,10 +61,13 @@ roster remains untouched in `pyrox_groups.py` for comparison.
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
+streamlit run app.py            # general app
+streamlit run app_athletes.py   # runners/walkers, full methodology
+streamlit run app_beleid.py     # simplified policy/organiser view
 ```
 
-The app opens at `http://localhost:8501`.
+Each opens at `http://localhost:8501` (run one at a time, or on separate
+ports with `--server.port`).
 
 Run the acceptance tests for the revised calibration:
 
@@ -62,18 +79,32 @@ python3 test_revised_calibration.py
 
 1. Put this folder in a GitHub repository.
 2. Go to https://share.streamlit.io and sign in with GitHub.
-3. "New app" → select the repository → entry point `app.py` → Deploy.
+3. "New app" → select the repository → entry point `app.py`, `app_athletes.py`,
+   or `app_beleid.py` → Deploy. All three can point at the same repo — one
+   set of modules, three front-ends — so a fix reaches all three at once.
+
+See `HANDLEIDING.md` for Python-version pinning and troubleshooting specific
+to Streamlit Community Cloud.
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `app.py` | Streamlit interface |
+| `app.py` | Streamlit interface — general population app |
+| `app_athletes.py` | Streamlit interface — runners/walkers, full methodology |
+| `app_beleid.py` | Streamlit interface — simplified policy/organiser view |
 | `Thermopoulos_Data_Engine.py` | Weather acquisition, UHI, MRT, WBGT, UTCI |
 | `thermopoulos_loader.py` | Bridge from weather data to daily heat load |
 | `pyrox_model.py` | PYROX strain dynamics (paper Sec 2.2) |
 | `pyrox_groups.py` | Population group roster, original parameters |
 | `pyrox_revised_calibration.py` | Revised parameters, MET term, full rationale |
+| `pyrox_bridge.py` | PYROX execution + pace→MET conversion, shared by all three apps |
+| `hestia_model.py` | HESTIA individual-tier model (JOS-3, CVR, EHS outcomes, post-finish module) |
+| `hestia_bridge.py` | HESTIA quick-estimate / full-precision entry points, caching |
+| `HESTIA_CVR_Module_v2.py` | Cardiovascular reserve module (Lloyd et al. 2022) |
+| `decision_support.py` | Hourly activity/rest guidance, WBGT↔UTCI divergence check |
+| `gpx_route.py` | GPX parsing, race pace/exposure profiles along a route |
+| `terrain_lookup.py` | ESA WorldCover terrain classification (optional) |
 | `test_revised_calibration.py` | Acceptance tests for the revised calibration |
 
 ---
@@ -234,8 +265,45 @@ one call.
   baseline with a warning rather than failing; the strain results do not
   depend on it
 
-## Not included
+## HESTIA individual tier (correction to an earlier version of this README)
 
-The HESTIA individual-tier cardiovascular Monte Carlo simulation is not part
-of this app. At N = 1000 it takes minutes per run and needs a different
-architecture (an asynchronous job queue, or a precomputed lookup table).
+An earlier version of this README stated the HESTIA individual-tier
+cardiovascular Monte Carlo simulation was not part of this app, because at
+N = 1000 it takes minutes per run. That has since been addressed with a
+two-speed architecture in `hestia_bridge.py`:
+
+- **Quick estimate** (`run_quick_estimate`): a small, capped-worker,
+  scenario-cached run, safe to call on every page render — this is what
+  drives the headline "EHS estimate" shown in `app_athletes.py` and
+  `app_beleid.py`.
+- **Full precision** (`run_full_precision`): the full N=5000 run, not
+  cached at this level, invoked only on explicit user request ("Run full
+  precision").
+
+Three defects found and fixed in this tier since the population-tier
+revision below (all documented in code comments at their fix sites, and in
+`GEBRUIKSAANWIJZING.md` §3.6 for a user-facing explanation):
+
+1. **Clothing insulation (2026-08-09/10).** `clo_value` defaulted to 0.5
+   (light indoor clothing, ISO 9920) regardless of conditions, including
+   hot-weather running kit (~0.2-0.3). This was the single largest
+   contributor to T_rect over-prediction found in that investigation —
+   larger than any factor in the earlier CO_reserve/CHSI work. Fixed to
+   0.2; the dose-response curve was re-fit against the corrected
+   simulations (fit quality is honestly *worse* post-fix, since fewer
+   participants now enter the danger quadrant at all — see the docstring
+   above `_DOSE_RESPONSE_A`/`_DOSE_RESPONSE_B` in `hestia_bridge.py`).
+2. **Hydration accounting (2026-08-09).** The cardiovascular-reserve module
+   read a separate, never-decremented fluid-loss accumulator instead of the
+   value the model's own drinking simulation already tracked correctly,
+   causing reserve to appear to erode even in mild, constant conditions
+   with no heat escalation at all.
+3. **Post-finish module (rev14).** 30-40% of EHS cases at mass running
+   events occur in the finish zone, not during the race (Roberts 1998; Rae
+   et al. 2008). `simulate_post_finish()` in `hestia_model.py` propagates
+   T_rect (metabolic after-glow) and CO_reserve (acute venous pooling,
+   Rowell 1974) for 10 minutes after the race ends, without pacing control.
+
+**Scope limit, unchanged from the original text:** this remains a
+screening-level simulation, not a validated clinical predictor for any
+named individual.

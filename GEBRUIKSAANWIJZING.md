@@ -4,12 +4,24 @@ Deze handleiding is voor mensen die de app **gebruiken**: organisatoren,
 hulpverleners, coaches, deelnemers. Voor het beheren van de Streamlit/
 GitHub-technische kant is er een aparte handleiding (`HANDLEIDING.md`).
 
-PYROX bestaat uit **twee apps**, en dit document behandelt beide:
+PYROX bestaat uit **drie apps**, en dit document behandelt ze alle drie:
 
 | App | Voor wie |
 |---|---|
 | **PYROX** (algemeen) | Beleid, beroepsgroepen, de brede bevolking |
-| **PYROX Participants** | Hardlopers, wandelaars, evenementenorganisatie |
+| **PYROX Participants** | Hardlopers, wandelaars, evenementenorganisatie — volledige methodologie |
+| **PYROX Beleid** | Beleidsmakers/organisatoren die snel het eindresultaat voor één specifieke run willen zien, zonder de onderzoeksmatige onderbouwing eromheen |
+
+De derde app, PYROX Beleid, is een sterk vereenvoudigde versie van PYROX
+Participants: dezelfde locatie-, tempo- en sessie-invoer, maar alleen de
+uitkomst die deze doelgroep nodig heeft — weersomstandigheden, tijd per
+vlagcategorie, het EHS-hoofdgetal (§3.6), de T_rect/CO_reserve-scatter en
+de piekverdelingen. De ruwe/ongekalibreerde cijfers, de PROVISIONAL-
+kanttekeningen, de meerdaagse PYROX-context en het evidence-paneel staan
+er bewust niet in — die audience heeft er niet minder recht op, maar wél
+minder behoefte aan, en te veel methodologie op het verkeerde moment leidt
+juist af van de beslissing die genomen moet worden. Wie de volledige
+onderbouwing wil, gebruikt PYROX Participants.
 
 Als dit je eerste keer is: lees eerst **§1 Snelstart**, en kom pas terug
 naar de rest als je specifieke vragen hebt. Je hoeft niet alles te
@@ -136,6 +148,14 @@ naar clo=0,2 (realistische hardloopkleding), gecheckt tegen zowel
 Veltmeijer als Falmouth. De ruwe simulatie is sindsdien veel
 geloofwaardiger, al blijft hij ongekalibreerd getoond.
 
+**Kleinere correctie, 2026-08-09:** de cardiovasculaire reserve leek in een
+eerdere versie ook bij mild, constant weer zonder hitte-escalatie
+langzaam te eroderen. Oorzaak was een technische bug (een vochtverlies-
+teller die het drinkgedrag van de gesimuleerde deelnemer niet meenam),
+niet een probleem met het dehydratiemodel zelf. Gecorrigeerd; de
+cardiovasculaire cijfers in dit onderdeel zijn sindsdien betrouwbaarder
+bij lange, milde scenario's.
+
 **De ruwe simulatiecijfers** staan nog steeds beschikbaar, in een
 uitklapbare sectie "Raw physiological simulation (uncalibrated)":
 
@@ -146,6 +166,28 @@ uitklapbare sectie "Raw physiological simulation (uncalibrated)":
 | Worth monitoring (broad screen) | Brede signaleringsvlag (uitdroging óf hoge inspanning óf hoge temperatuur) — bewust ruim, geen medisch incidentcijfer |
 | Avg. cardiovascular capacity remaining | Hoeveel cardiovasculaire reserve een gemiddelde deelnemer overhoudt tijdens + 10 min na de finish |
 | Reached zero/negative capacity | % dat op enig moment tijdens/vlak na de race op nul of negatieve capaciteit komt |
+
+**Waarom de dosis vaak pas ná de finish begint te lopen.** De grafiek
+"How risk builds over time" laat voor veel deelnemers een cumulatieve
+dosis zien die tijdens de race op nul blijft en pas rond het eigen finish-
+moment (de stippellijn) omhoogschiet. Dat is geen fout, maar het model dat
+een goed gedocumenteerd klinisch patroon reproduceert: **30-40% van alle
+EHS-gevallen bij grote hardloopevenementen gebeurt in de finishzone, niet
+tijdens de race zelf** (Roberts 1998; Rae et al. 2008). Twee dingen
+gebeuren namelijk zodra iemand stopt: de kerntemperatuur blijft nog even
+doorstijgen (restwarmte die vanuit de spieren naar de kern diffundeert,
+terwijl actieve koeling wegvalt), en de cardiovasculaire reserve stort
+acuut in doordat de spierpomp stopt en de veneuze terugvoer terugvalt
+("venous pooling", Rowell 1974). Omdat de dosis pas telt wanneer T_rect≥
+40,5°C ÉN CO_reserve≤0 **tegelijk** gelden, vallen die twee voorwaarden bij
+veel deelnemers precies rond het finish-moment samen.
+
+Bij een pittiger tempo (hogere MET) kan de dosis al **tijdens** de race
+beginnen te lopen, niet pas erna — dan is de deelnemer al vóór de finish
+tegelijk boven de temperatuurdrempel én cardiovasculair door de reserve
+heen. Dat onderscheidt twee reële faalmodi die het model allebei laat
+zien: te-langzaam-en-te-lang (risico concentreert zich rond de finish) en
+te-hard-gaan (risico loopt al tijdens de race op).
 
 **Belangrijke beperkingen van het hoofdgetal:**
 - De Falmouth-regressie waarop het dosis-responsmodel is gekalibreerd, is

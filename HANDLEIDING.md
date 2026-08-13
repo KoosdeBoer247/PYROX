@@ -4,9 +4,32 @@ Deze handleiding beschrijft hoe je dit project beheert zonder opnieuw in de
 valkuilen te lopen die we onderweg zijn tegengekomen. Elke waarschuwing hierin
 staat er omdat het één keer is misgegaan.
 
-Versie van deze set: **build 2026-08-10b**
+Versie van deze set: **build 2026-08-12c**
 Laatst geverifieerd: alle modules compileren, alle acceptatietests slagen,
-beide apps starten zonder fouten.
+alle drie de apps starten zonder fouten. Let op: `app.py` en
+`app_athletes.py` staan op buildstempel 2026-08-12a, `app_beleid.py` op
+2026-08-12c — verschillende bestanden mogen verschillende buildstempels
+hebben, zolang elk bestand zijn eigen stempel maar ophoogt bij een wijziging
+(zie §7).
+
+**Sinds 2026-08-12c, kort:** een derde app is toegevoegd, `app_beleid.py` —
+een sterk vereenvoudigde weergave voor beleidsmakers en evenementorganisatoren
+die alleen het eindresultaat nodig hebben, zonder de PROVISIONAL-kalibratie-
+kanttekeningen en methodologie-uitleg die de onderzoeksapp wél toont. Zie §1.
+
+**Sinds 2026-08-10b, kort:** de dosis-responscurve waarop het HESTIA-
+hoofdgetal is gebaseerd, is opnieuw gefit ná de clo-correctie hieronder — de
+oorspronkelijke fit was gekalibreerd op simulaties die structureel te heet
+liepen. De nieuwe fit is losser (minder deelnemers raken het gevarenkwadrant
+ooit), en dat staat expliciet zo in de app en in GEBRUIKSAANWIJZING.md §3.6.
+
+**Sinds 2026-08-09, kort:** een hydratatiebug in `hestia_model.py` is
+gefixed — de cardiovasculaire-reservemodule las een aparte, nooit-
+gedecrementeerde vochtverliesteller (`cvr_water_loss_kg`) in plaats van de
+teller die het model se eigen drink-simulatie al correct bijhield. Gevolg:
+cardiovasculaire reserve leek te eroderen ook bij mild, constant weer zonder
+enige hitte-escalatie. Zie de code-comment bij `calculate_indices_jos3_adult`
+in `hestia_model.py` voor de volledige diagnose.
 
 **Sinds 2026-08-06a, kort:** een verkeerd ingevulde kledingisolatiewaarde
 (clo=0,5 -> 0,2) bleek de HESTIA-simulatie structureel te heet te laten
@@ -20,17 +43,26 @@ paragraaf 3.6 voor de volledige uitleg.
 
 ## 1. De opzet in één alinea
 
-Eén GitHub-repository bevat alle bestanden. Streamlit draait daar **twee
+Eén GitHub-repository bevat alle bestanden. Streamlit draait daar **drie
 apps** uit, die verschillen in één ding: welk bestand het startpunt is.
 Alle modellen en rekenmodules worden gedeeld. Een correctie in bijvoorbeeld
-`decision_support.py` werkt daardoor meteen in beide apps door. Dat is met
-opzet zo: twee kopieën van dezelfde logica lopen na verloop van tijd altijd
-uit elkaar, en niets waarschuwt je daarvoor.
+`decision_support.py` werkt daardoor meteen in alle drie de apps door. Dat
+is met opzet zo: meerdere kopieën van dezelfde logica lopen na verloop van
+tijd altijd uit elkaar, en niets waarschuwt je daarvoor.
 
 | App | Startbestand | Voor wie |
 |---|---|---|
-| PYROX (algemeen) | `app.py` | bevolkingsgroepen, beroepsgroepen, beleid |
-| PYROX Participants | `app_athletes.py` | hardlopers en wandelaars, evenementen |
+| PYROX (algemeen) | `app.py` | bevolkingsgroepen, beroepsgroepen, beleid — volledige onderzoeksinterface |
+| PYROX Participants | `app_athletes.py` | hardlopers en wandelaars, evenementenorganisatie — volledige methodologie zichtbaar |
+| PYROX Beleid | `app_beleid.py` | beleidsmakers/organisatoren die alleen het eindresultaat voor één specifieke run nodig hebben — sterk vereenvoudigd, PROVISIONAL-kanttekeningen en ruwe HESTIA-cijfers bewust weggelaten |
+
+`app_beleid.py` deelt dezelfde zijbalk en tempo/sessie-invoer als
+`app_athletes.py`, maar toont in het hoofdscherm alleen: weersomstandigheden,
+tijd per WBGT-vlagcategorie, het EHS-hoofdgetal (dosis-responsmodel), de
+T_rect/CO_reserve-scatter en de piekverdelingen. Wat bewust ontbreekt (ruwe/
+ongekalibreerde HESTIA-cijfers, PROVISIONAL-kalibratiewaarschuwingen,
+meerdaagse PYROX-context, GPX-parcoursanalyse, het evidence-paneel) staat in
+de docstring bovenin het bestand.
 
 ---
 
@@ -42,8 +74,9 @@ uit elkaar, en niets waarschuwt je daarvoor.
 |---|---|
 | `app.py` | De algemene app: layout, zijbalk, alle schermonderdelen |
 | `app_athletes.py` | De deelnemersapp: niveaus, tempo, wedstrijdvlaggen |
+| `app_beleid.py` | De beleidsapp: subset van `app_athletes.py`'s invoer, sterk vereenvoudigde uitvoer |
 
-### Applicatiemodules (gedeeld door beide apps)
+### Applicatiemodules (gedeeld door alle drie de apps)
 
 | Bestand | Rol |
 |---|---|
@@ -119,7 +152,7 @@ in plaats van de inhoud. Verwijder alles en doe het opnieuw.
 
 ---
 
-## 4. Streamlit: de twee apps
+## 4. Streamlit: de drie apps
 
 ### ⚠️ EERST: kies Python 3.12
 
@@ -160,6 +193,14 @@ Repository: je PYROX-repo · Branch: `main` · **Main file path: `app.py`**
 5. **Advanced settings → Python version: 3.12**
 6. Kies een herkenbare URL, bijvoorbeeld `pyrox-events`
 
+### De derde app aanmaken (beleidsweergave)
+
+Zelfde procedure, met **Main file path: `app_beleid.py`**. Ook deze
+deployment wijst naar dezelfde repo — één set modules, drie front-ends, dus
+een fix in bijvoorbeeld `hestia_bridge.py` bereikt alle drie tegelijk. Kies
+een URL die het onderscheid met de andere twee duidelijk maakt, bijvoorbeeld
+`pyrox-beleid`.
+
 ### Na elke upload
 
 Streamlit herstart meestal vanzelf bij een nieuwe commit. Zo niet:
@@ -176,8 +217,14 @@ meegekomen bij het uploaden.
 Onderin de zijbalk staat:
 
 ```
-Build 2026-08-10b (...)
+Build 2026-08-12a (...)   ← app.py / app_athletes.py
+Build 2026-08-12c (...)   ← app_beleid.py
 ```
+
+De drie apps hebben elk hun **eigen** `APP_BUILD`-stempel — dat is normaal,
+zolang elke stempel maar hoort bij de laatste wijziging in dát bestand. Het
+gaat mis als een stempel *lager* is dan je verwacht op basis van een recente
+wijziging: dan is dat specifieke bestand niet meegekomen bij het uploaden.
 
 **Zie je die regel niet**, dan draait de app op oude code — punt uit, geen
 verdere discussie nodig.
@@ -348,5 +395,6 @@ Bij elke nieuwe upload:
 
 Bij een codewijziging bovendien:
 
-- [ ] Buildstempels opgehoogd in gewijzigde bestanden én in beide apps
+- [ ] Buildstempels opgehoogd in gewijzigde bestanden én in alle drie de apps
+      die het bestand gebruiken
 - [ ] `test_revised_calibration.py` geslaagd
