@@ -18,7 +18,7 @@ what action to take, it doesn't belong in this report.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-12a"
+__BUILD__ = "2026-08-13a"
 
 import io
 from datetime import datetime
@@ -79,10 +79,17 @@ def _fig_to_png_bytes(fig) -> io.BytesIO:
     return buf
 
 
-def _weather_chart(weather_df, exp_start, finish):
+def _weather_chart(weather_df, exp_start, finish, post_finish_end=None):
     """T_air/WBGT/UTCI/MRT over the race window, with the same colour
     mapping and flag-zone shading as the live app's Plotly chart, so a
     reader who has seen both recognises them as the same data.
+
+    post_finish_end : optional Timestamp -- if given, the span between
+    `finish` and `post_finish_end` is shaded and labelled separately, to
+    mark HESTIA's own post-finish simulation window (metabolic afterglow +
+    acute venous pooling; PF_DUUR_MIN in hestia_model.py) as distinct from
+    the race itself. Purely visual -- does not change which rows are
+    plotted (the window margin below already covers it).
 
     Returns (png_bytes, plotted_labels) -- plotted_labels lists only the
     variables that actually had usable (non-all-NaN) data, so the caption
@@ -91,9 +98,10 @@ def _weather_chart(weather_df, exp_start, finish):
     """
     import matplotlib.dates as mdates
 
+    window_end = (post_finish_end if post_finish_end is not None else finish)
     window = weather_df[
         (weather_df.index >= pd.Timestamp(exp_start) - pd.Timedelta(hours=6))
-        & (weather_df.index <= finish + pd.Timedelta(hours=2))
+        & (weather_df.index <= window_end + pd.Timedelta(hours=2))
     ]
     if window.empty or len(window) < 2:
         return None, []
@@ -152,6 +160,14 @@ def _weather_chart(weather_df, exp_start, finish):
            va="top", ha="left", color="#1e293b", fontweight="bold",
            bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.75))
 
+    if post_finish_end is not None:
+        pf_naive = (pd.Timestamp(post_finish_end).tz_localize(None)
+                   if pd.Timestamp(post_finish_end).tz is not None
+                   else pd.Timestamp(post_finish_end))
+        ax.axvspan(finish_naive, pf_naive, color="#0ea5e9", alpha=0.10, zorder=0)
+        ax.text(pf_naive, y_min, " post-finish window ", fontsize=6.5,
+               va="bottom", ha="right", color="#0c4a6e", style="italic")
+
     if all_nan_vars:
         ax.text(0.5, 0.06, "No data: " + ", ".join(all_nan_vars),
                transform=ax.transAxes, fontsize=7.5, ha="center", va="bottom",
@@ -166,6 +182,80 @@ def _weather_chart(weather_df, exp_start, finish):
     # the time only -- avoids repeating the date on every tick.
     ax.set_xlabel(start_naive.strftime("%A %d %B %Y"), fontsize=8)
 
+    ax.set_ylabel("\u00b0C", fontsize=9)
+    if plotted:
+        ax.legend(loc="upper left", fontsize=7, ncol=4, frameon=False)
+    ax.tick_params(labelsize=7)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    return _fig_to_png_bytes(fig), plotted
+
+
+def _day_overview_chart(weather_df, exp_date, exp_start=None):
+    """T_air/WBGT/UTCI/MRT across the WHOLE chosen calendar day (00:00-
+    24:00 local), independent of any one level's pace or start time --
+    the day-level picture a reader should see before zooming into a
+    specific run. Same visual language as _weather_chart (colours, flag
+    shading) so the two read as one report, not two different styles.
+
+    exp_start, if given, is marked with a vertical line so the reader can
+    place the chosen start time in the context of the full day.
+
+    Returns (png_bytes, plotted_labels), same contract as _weather_chart.
+    """
+    import matplotlib.dates as mdates
+
+    day = pd.Timestamp(exp_date)
+    tz = weather_df.index.tz
+    day_start = pd.Timestamp(day.date()).tz_localize(tz) if tz is not None else pd.Timestamp(day.date())
+    day_end = day_start + pd.Timedelta(days=1)
+    window = weather_df[(weather_df.index >= day_start) & (weather_df.index < day_end)]
+    if window.empty or len(window) < 2:
+        return None, []
+
+    fig, ax = plt.subplots(figsize=(6.8, 3.0))
+    x = window.index.tz_localize(None) if window.index.tz is not None else window.index
+    plotted, all_nan_vars = [], []
+
+    for col, style, colour, lw, label in [
+        ("MRT", ":", "#1f77b4", 1.3, "MRT"),
+        ("T_air_urban", "-", "#ff7f0e", 1.5, "T_air"),
+        ("UTCI", "-", "#9467bd", 1.5, "UTCI"),
+        ("WBGT", "-", "#d62728", 1.7, "WBGT"),
+    ]:
+        if col not in window.columns:
+            continue
+        y = window[col].to_numpy(dtype=float)
+        if np.all(np.isnan(y)):
+            all_nan_vars.append(label)
+            continue
+        ax.plot(x, y, style, color=colour, linewidth=lw, label=label)
+        plotted.append(label)
+
+    ax.set_xlim(x[0], x[-1])
+    if not plotted and not all_nan_vars:
+        plt.close(fig)
+        return None, []
+
+    ax.axhspan(23, 28, color="#d62728", alpha=0.10, zorder=0)
+    ax.axhspan(28, max(45, ax.get_ylim()[1]), color="#450a0a", alpha=0.22, zorder=0)
+
+    if exp_start is not None:
+        start_naive = (pd.Timestamp(exp_start).tz_localize(None)
+                       if pd.Timestamp(exp_start).tz is not None else pd.Timestamp(exp_start))
+        ax.axvline(start_naive, color="#1e293b", linestyle="--", linewidth=1.1)
+        ax.text(start_naive, ax.get_ylim()[1], f" chosen start {start_naive.strftime('%H:%M')}",
+               fontsize=7, va="top", ha="left", color="#1e293b", fontweight="bold")
+
+    if all_nan_vars:
+        ax.text(0.5, 0.06, "No data: " + ", ".join(all_nan_vars),
+               transform=ax.transAxes, fontsize=7.5, ha="center", va="bottom",
+               color="#7f1d1d",
+               bbox=dict(boxstyle="round,pad=0.3", fc="#fee2e2", ec="#7f1d1d", alpha=0.85))
+
+    ax.xaxis.set_major_locator(mdates.HourLocator(interval=2))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    ax.set_xlabel(day_start.strftime("%A %d %B %Y"), fontsize=8)
     ax.set_ylabel("\u00b0C", fontsize=9)
     if plotted:
         ax.legend(loc="upper left", fontsize=7, ncol=4, frameon=False)
@@ -387,8 +477,9 @@ def _flag_colour(flag_name: str) -> str:
 # =============================================================================
 # Section builders
 # =============================================================================
-def _add_title_section(doc, city_name, exp_start, generated_at, app_build):
-    title = doc.add_heading("PYROX \u2014 Findings Report", level=0)
+def _add_title_section(doc, city_name, exp_start, generated_at, app_build,
+                       report_title="PYROX \u2014 Findings Report"):
+    title = doc.add_heading(report_title, level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     p = doc.add_paragraph()
@@ -703,6 +794,258 @@ def _add_limitations_section(doc, hestia_results):
 # =============================================================================
 # Entry point
 # =============================================================================
+def _add_day_overview_section(doc, weather_df, exp_date, exp_start):
+    """The chosen day, in general -- before zooming into any one level's
+    start time. Uses the WHOLE calendar day (00:00-24:00 local), not the
+    race window, so a reader sees how the day as a whole shaped up before
+    reading about the specific run."""
+    from decision_support import exposure_by_flag, flag_display_name
+
+    _add_heading(doc, "Day overview", level=1)
+    day = pd.Timestamp(exp_date)
+    tz = weather_df.index.tz
+    day_start = pd.Timestamp(day.date()).tz_localize(tz) if tz is not None else pd.Timestamp(day.date())
+    day_end = day_start + pd.Timedelta(days=1)
+    window = weather_df[(weather_df.index >= day_start) & (weather_df.index < day_end)]
+
+    if window.empty:
+        doc.add_paragraph("No weather data available for this day.")
+        return
+
+    cols = [c for c in ["T_air_urban", "WBGT", "UTCI", "MRT"] if c in window.columns]
+    table = doc.add_table(rows=1, cols=1 + len(cols))
+    table.style = "Light Grid Accent 1"
+    _disable_first_row_style(table)
+    table.alignment = WD_TABLE_ALIGNMENT.LEFT
+    hdr = table.rows[0].cells
+    hdr[0].text = "Metric"
+    labels = {"T_air_urban": "T_air (\u00b0C)", "WBGT": "WBGT (\u00b0C)",
+             "UTCI": "UTCI (\u00b0C)", "MRT": "MRT (\u00b0C)"}
+    for i, c in enumerate(cols):
+        hdr[i + 1].text = labels.get(c, c)
+    for stat_name, fn in [("Peak", "max"), ("Mean over the day", "mean"), ("Minimum", "min")]:
+        row = table.add_row().cells
+        row[0].text = stat_name
+        for i, c in enumerate(cols):
+            val = getattr(window[c], fn)()
+            row[i + 1].text = f"{val:.1f}"
+
+    _add_caption(doc, f"Full calendar day: {day_start.strftime('%A %d %B %Y')}, "
+                      "00:00\u201324:00 local time -- independent of any one "
+                      "level's own start time or pace.")
+    doc.add_paragraph()
+
+    day_exposure = exposure_by_flag(weather_df, day_start, day_end)
+    if day_exposure:
+        flag_table = doc.add_table(rows=1, cols=4)
+        flag_table.style = "Light List Accent 1"
+        _disable_first_row_style(flag_table)
+        hdr2 = flag_table.rows[0].cells
+        for i, status in enumerate(["race_green", "race_yellow", "race_red", "race_black"]):
+            hdr2[i].text = flag_display_name(status)
+        row2 = flag_table.add_row().cells
+        for i, status in enumerate(["race_green", "race_yellow", "race_red", "race_black"]):
+            hrs = day_exposure.get(status, 0.0)
+            row2[i].text = f"{hrs:.1f}h"
+            if hrs > 0:
+                _set_cell_shading(row2[i], _flag_colour(flag_display_name(status)))
+        _add_caption(doc, "Hours the whole day spends in each WBGT flag category "
+                          "(same thresholds as the athletics-federation flags used "
+                          "throughout this suite) -- not specific to any level's "
+                          "own exposure, which is shown separately for the chosen "
+                          "start time below.")
+        doc.add_paragraph()
+
+    chart, plotted = _day_overview_chart(weather_df, exp_date, exp_start)
+    if chart is not None:
+        doc.add_picture(chart, width=Cm(15.5))
+        var_list = ", ".join(plotted[:-1]) + (" and " + plotted[-1] if len(plotted) > 1 else plotted[0])
+        _add_caption(doc, f"{var_list}, hour by hour, across the full day. Dashed "
+                          "line marks the chosen start time (zoomed in below). "
+                          "Shaded bands mark the red (23\u201328\u00b0C) and black "
+                          "(>28\u00b0C) WBGT flag zones.")
+        doc.add_paragraph()
+
+
+def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
+                             post_finish_end, hestia_result, met_value=None,
+                             duration_minutes=None):
+    """Zoomed-in section for one level: the chosen start time through the
+    race itself and HESTIA's own post-finish simulation window. Mirrors
+    exactly what app_beleid.py shows on screen for this level -- no raw/
+    uncalibrated figures, no PROVISIONAL-calibration table rows, no
+    multi-day PYROX context. If it isn't on the policy view's screen, it
+    isn't in this section either, so the downloaded report never says
+    more than the app the reader was just looking at."""
+    from decision_support import exposure_by_flag, flag_display_name, worst_flag
+
+    _add_heading(doc, level_label, level=1)
+
+    meta = doc.add_paragraph()
+    meta_bits = [f"Start {pd.Timestamp(exp_start).strftime('%H:%M')}",
+                f"finish (est.) {pd.Timestamp(finish).strftime('%H:%M')}"]
+    if duration_minutes is not None:
+        meta_bits.append(f"{duration_minutes:.0f} min")
+    if met_value is not None:
+        meta_bits.append(f"MET {met_value:.1f}")
+    meta.add_run(" \u2014 ".join(meta_bits)).italic = True
+
+    exposure = exposure_by_flag(weather_df, exp_start, finish)
+    flag = worst_flag(exposure) if exposure else None
+    flag_name = flag_display_name(flag) if flag else "no data"
+
+    table = doc.add_table(rows=0, cols=2)
+    table.style = "Light List Accent 1"
+    _disable_first_row_style(table)
+
+    def _row(label, value, shade=None):
+        r = table.add_row().cells
+        r[0].text = label
+        r[1].text = str(value)
+        if shade:
+            _set_cell_shading(r[1], shade)
+            for para in r[1].paragraphs:
+                for run in para.runs:
+                    run.font.color.rgb = RGBColor(0x1A, 0x1A, 0x1A)
+                    run.font.bold = True
+
+    _row("Worst WBGT flag reached (race window)", flag_name, _flag_colour(flag_name))
+
+    dose_pct = hestia_result.get("pct_dose_response_ehs") if hestia_result else None
+    falmouth_est = hestia_result.get("falmouth_ehs_per_1000") if hestia_result else None
+    mean_t = hestia_result.get("mean_t_air_race_window") if hestia_result else None
+    if dose_pct is not None:
+        _row("EHS estimate (dose-response model)", f"\u2248{dose_pct*10:.1f} per 1000")
+
+    doc.add_paragraph()
+
+    chart, plotted = _weather_chart(weather_df, exp_start, finish, post_finish_end)
+    if chart is not None:
+        doc.add_picture(chart, width=Cm(15.5))
+        var_list = ", ".join(plotted[:-1]) + (" and " + plotted[-1] if len(plotted) > 1 else plotted[0])
+        _add_caption(doc, f"{var_list}, hour by hour, around this level's own start "
+                          "and finish. Dashed line = start, dotted line = estimated "
+                          "finish. The lightly shaded band after the finish marks "
+                          "HESTIA's post-finish simulation window (metabolic "
+                          "afterglow and acute venous pooling continue to raise "
+                          "risk for a short time after runners stop -- Roberts "
+                          "1998; Rowell 1974).")
+        doc.add_paragraph()
+
+    if hestia_result is None:
+        doc.add_paragraph(
+            "Physiological simulation was not calculated for this level in "
+            "this run (the \u201cCalculate\u201d button was not used before "
+            "downloading this report)."
+        )
+        doc.add_paragraph()
+        return
+
+    if dose_pct is not None:
+        summary = doc.add_paragraph()
+        summary.add_run(
+            f"Per 1000 participants at this level, under these conditions: "
+            f"\u2248{dose_pct*10:.1f} are estimated to experience exertional "
+            f"heat stroke, from a dose-response model over this scenario's "
+            f"actual simulated pace, duration and group."
+        ).italic = True
+        note_parts = []
+        if falmouth_est is not None:
+            note_parts.append(
+                f"alternative estimate, temperature only (Falmouth Road Race, "
+                f"DeMartini et al. 2014): \u2248{falmouth_est:.1f} per 1000"
+                + (f" at {mean_t:.1f}\u00b0C" if mean_t is not None else "")
+            )
+        note_text = ("For comparison \u2014 " + "; ".join(note_parts) + ". "
+                     if note_parts else "")
+        _add_caption(doc, note_text +
+                          "EXPLORATORY calibration: fit at n=120 simulated "
+                          "participants per scenario, well below production "
+                          "scale. For the full methodology, raw/uncalibrated "
+                          "figures, and multi-day PYROX context, see the PYROX "
+                          "Participants view.")
+
+    chart_specs = [
+        (_t_rect_co_reserve_scatter(hestia_result.get("t_rect_co_reserve_pairs", []), level_label),
+         "T_rect against CO_reserve, every simulated participant at every "
+         "timestep (race and post-finish window). The shaded quadrant "
+         "(T_rect\u226540.5\u00b0C AND CO_reserve\u22640) is the true EHS criterion "
+         "behind the estimate above."),
+        (_hestia_distribution_chart(hestia_result.get("peak_t_rect_all", []), level_label),
+         "Distribution of peak core temperature across the simulated population."),
+        (_co_reserve_distribution_chart(hestia_result.get("worst_co_reserve_all", []), level_label),
+         "Distribution of worst cardiovascular reserve across the simulated population."),
+    ]
+    traces = [tr for tr in hestia_result.get("representative_traces", [])
+             if tr.get("label") != "Population median"]
+    if traces:
+        chart_specs.append((
+            dose_evolution_chart(traces, level_label),
+            "How risk builds over time for representative participants. "
+            "Dotted vertical line: this level's own stop/finish time.",
+        ))
+
+    for chart_img, caption in chart_specs:
+        if chart_img is not None:
+            doc.add_picture(chart_img, width=Cm(13.5))
+            _add_caption(doc, caption)
+            doc.add_paragraph()
+
+
+def generate_policy_report_docx(
+    city_name: str, exp_date, exp_start, weather_df: pd.DataFrame,
+    levels_data: dict, tz_name: str, app_build: str,
+) -> bytes:
+    """Word report for app_beleid.py (the simplified policy/organiser
+    view). Deliberately a SEPARATE entry point from generate_report_docx()
+    rather than a thin wrapper around it: that function's per-level section
+    hard-requires PYROX multi-day results (`pyrox_result["groups"]`), which
+    this app never computes, by design (see its module docstring -- "NOT
+    shown: ... multi-day PYROX context"). Reusing it here would either
+    force app_beleid.py to compute data it deliberately hides on screen, or
+    silently reintroduce exactly the raw/uncalibrated figures and
+    PROVISIONAL caveats that app was built to leave out. This function
+    instead mirrors app_beleid.py's own screen: day overview first, then
+    one zoomed race-window section per level, each ending at HESTIA's own
+    post-finish simulation window rather than an arbitrary margin.
+
+    levels_data : dict, level_label -> {
+        "finish": Timestamp, "post_finish_end": Timestamp,
+        "hestia_result": dict | None, "met_value": float | None,
+        "duration_minutes": float | None,
+    }
+    """
+    doc = Document()
+    section = doc.sections[0]
+    section.left_margin = section.right_margin = Cm(2.2)
+
+    generated_at = pd.Timestamp.now(tz=tz_name)
+    _add_title_section(doc, city_name, exp_start, generated_at, app_build,
+                       report_title="PYROX \u2014 Policy Report")
+    _add_day_overview_section(doc, weather_df, exp_date, exp_start)
+
+    for level_label, d in levels_data.items():
+        _add_race_window_section(
+            doc, level_label, weather_df, exp_start, d["finish"],
+            d.get("post_finish_end", d["finish"]), d.get("hestia_result"),
+            d.get("met_value"), d.get("duration_minutes"),
+        )
+
+    doc.add_paragraph()
+    closing = doc.add_paragraph()
+    closing.add_run(
+        "This report presents model outputs and findings only, matching "
+        "what the PYROX Beleid view showed on screen -- it does not include "
+        "recommendations for operational measures. For full methodology, "
+        "raw/uncalibrated figures, and multi-day PYROX context, use the "
+        "PYROX Participants view."
+    ).italic = True
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 def generate_report_docx(
     city_name: str, exp_start, weather_df: pd.DataFrame,
     per_level_exposure: dict, pyrox_result: dict, label_for: dict,

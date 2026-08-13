@@ -44,12 +44,14 @@ from pyrox_bridge import met_from_pace
 from pyrox_groups import WALKER_LEVELS, LEVELS
 from decision_support import exposure_by_flag, flag_display_name, flag_colour
 import hestia_bridge as hb
+from hestia_model import PF_DUUR_MIN
 from report_generator import (
     _t_rect_co_reserve_scatter, _hestia_distribution_chart,
     _co_reserve_distribution_chart, dose_evolution_chart,
+    generate_policy_report_docx,
 )
 
-APP_BUILD = "2026-08-12c (terrain labels translated to English)"
+APP_BUILD = "2026-08-13a (Word policy report)"
 
 
 # =============================================================================
@@ -247,6 +249,13 @@ if "results" not in st.session_state:
     st.session_state.results = None
 if "candidates" not in st.session_state:
     st.session_state.candidates = None
+if "beleid_hestia_by_level" not in st.session_state:
+    # Populated as each level's "Calculate" button is used, so the Word
+    # report (built after this loop) can include every level the reader
+    # has already looked at without recomputing anything. Cleared on a
+    # fresh "Run analysis" (new city/date) below, so a report can never
+    # silently mix results from a previous location.
+    st.session_state.beleid_hestia_by_level = {}
 
 # =============================================================================
 # Geocoding + fetch
@@ -260,6 +269,7 @@ if run_button:
         with st.spinner(f"Looking up '{city_name}'..."):
             try:
                 st.session_state.candidates = cached_geocode(city_name.strip())
+                st.session_state.beleid_hestia_by_level = {}
             except Exception as e:
                 st.error(f"Geocoding failed: {e}")
                 st.session_state.candidates = None
@@ -390,6 +400,14 @@ if st.session_state.results and selected_levels:
             st.warning("Simulation did not return a usable result for this level.")
             continue
 
+        st.session_state.beleid_hestia_by_level[lvl] = {
+            "finish": finish,
+            "post_finish_end": finish + pd.Timedelta(minutes=PF_DUUR_MIN),
+            "hestia_result": result,
+            "met_value": met_value,
+            "duration_minutes": paces[lvl] * session_km,
+        }
+
         dose_pct = result.get("pct_dose_response_ehs")
         falmouth_est = result.get("falmouth_ehs_per_1000")
         mean_t = result.get("mean_t_air_race_window")
@@ -457,3 +475,51 @@ if st.session_state.results and selected_levels:
                               caption="Distribution of worst cardiovascular reserve.")
 
         st.divider()
+
+    # -------------------------------------------------------------------
+    # Word report -- the chosen day in general, then one zoomed section
+    # per level from its own start time through HESTIA's post-finish
+    # window. Levels not yet calculated (button not pressed) are still
+    # listed in the report, flagged as not calculated, rather than
+    # silently omitted -- a reader comparing the report to the screen
+    # should never wonder why a selected level is simply missing.
+    # -------------------------------------------------------------------
+    st.markdown("### \U0001F4C4 Policy report")
+    levels_data = {}
+    for lvl in selected_levels:
+        cached = st.session_state.beleid_hestia_by_level.get(lvl)
+        if cached is not None:
+            levels_data[lvl] = cached
+        else:
+            levels_data[lvl] = {
+                "finish": finish_by_level[lvl],
+                "post_finish_end": finish_by_level[lvl] + pd.Timedelta(minutes=PF_DUUR_MIN),
+                "hestia_result": None,
+                "met_value": met_from_pace(paces[lvl], mode=LEVELS[lvl]["mode"]),
+                "duration_minutes": paces[lvl] * session_km,
+            }
+
+    not_calculated = [lvl for lvl, d in levels_data.items() if d["hestia_result"] is None]
+    if not_calculated:
+        st.caption(
+            "\u2139\ufe0f Not yet calculated, so not included with physiological "
+            "detail in the report: " + ", ".join(not_calculated) +
+            ". Use \u201cCalculate\u201d above first if you want full findings "
+            "for these levels."
+        )
+
+    st.download_button(
+        "\U0001F4C4 Download policy report (Word)",
+        data=generate_policy_report_docx(
+            city["name"], exp_date, exp_start, forecast_df, levels_data,
+            tz, APP_BUILD,
+        ),
+        file_name=f"pyrox_beleid_report_{city['name']}_{exp_date}.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        help="A Word report: the chosen day overall, then a zoomed section "
+             "per level from its own start time through the race and "
+             "HESTIA's post-finish window. Same scope as this page -- no "
+             "raw/uncalibrated figures, no PROVISIONAL caveats, no "
+             "multi-day PYROX context. Data and findings only, no "
+             "recommended actions.",
+    )
