@@ -741,9 +741,18 @@ def _add_per_level_section(doc, per_level_exposure, pyrox_result, label_for,
             dose_pct = hestia.get("pct_dose_response_ehs")
             level_met = met_by_level_label.get(level_label)
 
+            ehs_ci = hestia.get("ehs_interval")
             if dose_pct is not None:
+                _ehs_val = f"\u2248{dose_pct*10:.1f} per 1000"
+                if ehs_ci and "error" not in ehs_ci:
+                    _pct = int(round((1 - ehs_ci["alpha"]) * 100))
+                    _ehs_val += (
+                        f"  \u2014  {_pct}% sampling + anchor interval "
+                        f"{ehs_ci['lo_per_1000']:.2f}\u2013"
+                        f"{ehs_ci['hi_per_1000']:.2f} per 1000"
+                    )
                 _row("EHS estimate (primary: dose-response model, see note below)",
-                     f"\u2248{dose_pct*10:.1f} per 1000")
+                     _ehs_val)
                 race_minutes = duration_by_level_label.get(level_label, fallback_minutes)
                 met_off = level_met is not None and abs(level_met - 10.5) > 3.0
                 dur_off = race_minutes is not None and abs(race_minutes - 96) > 60
@@ -817,6 +826,14 @@ def _add_per_level_section(doc, per_level_exposure, pyrox_result, label_for,
                                   "the danger quadrant, leaving less data to fit). "
                                   "EXPLORATORY: fit at n=120/scenario, well below "
                                   "production scale.")
+                if ehs_ci and "error" not in ehs_ci:
+                    from uncertainty import interval_caveats
+                    for _c in interval_caveats(ehs_ci):
+                        _p = doc.add_paragraph()
+                        _r = _p.add_run("\u26a0\ufe0f " + _c)
+                        _r.italic = True
+                        _r.font.color.rgb = RGBColor(0x7f, 0x1d, 0x1d)
+
                 dose_warning = dose_positive_warning_text(
                     n_dose_pos, n_dose_total, hestia.get("pct_first_aid") if hestia else None,
                     mean_t)
@@ -1050,8 +1067,17 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
     falmouth_est = hestia_result.get("falmouth_ehs_per_1000") if hestia_result else None
     mean_t = hestia_result.get("mean_t_air_race_window") if hestia_result else None
     broad_screen = hestia_result.get("pct_first_aid") if hestia_result else None
+    ehs_ci = hestia_result.get("ehs_interval") if hestia_result else None
     if dose_pct is not None:
-        _row("EHS estimate (dose-response model)", f"\u2248{dose_pct*10:.1f} per 1000")
+        _ehs_val = f"\u2248{dose_pct*10:.1f} per 1000"
+        if ehs_ci and "error" not in ehs_ci:
+            _pct = int(round((1 - ehs_ci["alpha"]) * 100))
+            _ehs_val += (
+                f"  \u2014  {_pct}% sampling + anchor interval "
+                f"{ehs_ci['lo_per_1000']:.2f}\u2013"
+                f"{ehs_ci['hi_per_1000']:.2f} per 1000"
+            )
+        _row("EHS estimate (dose-response model)", _ehs_val)
     if broad_screen is not None:
         _row("Worth monitoring (broad screen: T_rect\u226540.5\u00b0C OR "
              "dehydration\u22652% OR RPE\u226517)", f"{broad_screen:.1f}%")
@@ -1110,6 +1136,13 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
                           "scale. For the full methodology, raw/uncalibrated "
                           "figures, and multi-day PYROX context, see the PYROX "
                           "Participants view.")
+        if ehs_ci and "error" not in ehs_ci:
+            from uncertainty import interval_caveats
+            for _c in interval_caveats(ehs_ci):
+                _p = doc.add_paragraph()
+                _r = _p.add_run("\u26a0\ufe0f " + _c)
+                _r.italic = True
+                _r.font.color.rgb = RGBColor(0x7f, 0x1d, 0x1d)
         dose_warning = dose_positive_warning_text(
             n_dose_pos, n_dose_total,
             hestia_result.get("pct_first_aid") if hestia_result else None,

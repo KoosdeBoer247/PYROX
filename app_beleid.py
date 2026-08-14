@@ -467,9 +467,14 @@ if st.session_state.results and selected_levels:
         mean_t = result.get("mean_t_air_race_window")
         broad_screen = result.get("pct_first_aid")
         if dose_pct is not None:
+            ehs_ci = result.get("ehs_interval")
             c1, c2, c3 = st.columns(3)
             c1.metric(
                 f"EHS estimate \u2014 {lvl}", f"\u2248{dose_pct*10:.1f} per 1000",
+                delta=(f"{ehs_ci['lo_per_1000']:.2f}\u2013"
+                       f"{ehs_ci['hi_per_1000']:.2f} sampling+anchor"
+                       if ehs_ci and "error" not in ehs_ci else None),
+                delta_color="off",
                 help="Dose-response model over this level's actual pace, "
                      "duration and simulated physiology, calibrated against "
                      "Falmouth Road Race epidemiology (DeMartini et al. "
@@ -493,6 +498,15 @@ if st.session_state.results and selected_levels:
                            "landing in the same range is reassuring, but "
                            "a difference between them does not mean "
                            "either one is wrong.")
+            if ehs_ci and "error" not in ehs_ci:
+                from uncertainty import interval_caveats
+                _caveats = interval_caveats(ehs_ci)
+                if _caveats:
+                    with st.expander(
+                            f"\u26a0\ufe0f What the interval does and does not "
+                            f"cover \u2014 {lvl}"):
+                        for _c in _caveats:
+                            st.markdown("- " + _c)
             if broad_screen is not None:
                 c3.metric(
                     "Worth monitoring (broad screen)", f"{broad_screen:.1f}%",

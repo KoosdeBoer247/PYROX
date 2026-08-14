@@ -406,3 +406,61 @@ Bij een codewijziging bovendien:
 - [ ] Buildstempels opgehoogd in gewijzigde bestanden én in alle drie de apps
       die het bestand gebruiken
 - [ ] `test_revised_calibration.py` geslaagd
+
+---
+
+## Onzekerheid rond de EHS-schatting (toegevoegd 2026-08-14)
+
+Naast het puntgetal toont de app en het Word-rapport nu een interval, bv.
+`≈33,5 per 1000 — 95% sampling + anker interval 25,5–41,7 per 1000`.
+
+**Wat het interval dekt**
+
+1. **Monte-Carlo-ruis.** De N gesimuleerde deelnemers zijn een eindige
+   trekking. Bootstrap-hersteekproef, aannamevrij.
+2. **Ankeronzekerheid van de floor.** De dose=0-floor komt uit de
+   gepubliceerde Falmouth-regressie (DeMartini et al. 2014, n=12
+   wedstrijdjaren, R²=0,653). Die fit heeft een eigen band, die breder
+   wordt naarmate je verder van het zwaartepunt (24,5 °C) af zit.
+
+**Wat het NIET dekt — en dit is de grotere fout**
+
+De helling van de dose-responscurve zelf. `_DOSE_RESPONSE_A/B` is gefit
+tegen vijf referentiescenario's waarin dosis en temperatuur verward zijn
+(dosis wordt alleen aan de warme kant positief, omdat MET vastgehouden
+werd). Met één effectieve ijkconditie is de helling statistisch niet
+geïdentificeerd: er bestaat geen steekproefmodel waaronder een
+dekkingskans voor die parameter te definiëren valt.
+
+Zodra een noemenswaardig deel van de deelnemers dosis>0 heeft, dragen
+juist die deelnemers vrijwel alle kansmassa, en hun kans komt volledig
+uit die niet-geïdentificeerde curve. **Het interval is daarom een
+ondergrens op de totale onzekerheid, geen betrouwbaarheidsinterval.**
+Noem het in rapportage nooit "95%-BI".
+
+Een smal interval rond een verkeerd getal is misleidender dan geen
+interval. Daarom staat de disclaimer altijd bovenaan bij de caveats,
+ook als het er statistisch gezond uitziet.
+
+**Diagnostiek die het interval meelevert**
+
+- `n_nonzero` — aantal deelnemers met dosis>0
+- `top_participant_share` — aandeel van de schatting bij één individu.
+  Bij Leiden 10-05-2026 was dit 84%: het puntgetal 1,2 per 1000 zat op
+  het rekenkundig maximum van één verzadigde simulant plus de floor.
+- `floor_share` — deel van de schatting dat uit de temperatuur-floor
+  komt in plaats van uit gesimuleerde dosis
+- `extrapolation_degrees` — hoeveel °C buiten Falmouths fitbereik
+  (21,3–27,7 °C) deze dag ligt
+
+**Testen**
+
+    python3 test_uncertainty.py
+
+**Aanpassen**
+
+De reconstructie van de Falmouth-spreiding gebruikt één aanname: de
+spreiding van de twaalf wedstrijdtemperaturen, afgeleid uit het
+gerapporteerde bereik. Die staat geïsoleerd in `_FALM_T_BAR` en
+`_FALM_T_SD` bovenaan `uncertainty.py` en kan vervangen worden zodra
+Tabel 1 uit het artikel gedigitaliseerd is.

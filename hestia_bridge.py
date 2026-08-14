@@ -676,6 +676,12 @@ def run_quick_estimate(weather_df: pd.DataFrame, lat: float, lon: float, tz_name
         # dose was already positive.
         result["pct_dose_response_ehs"] = _dose_response_pct_patched(
             result["cumulative_doses_all"], mean_t_air)
+        # [2026-08-14] Sampling + anchor interval around that headline.
+        # Imported lazily: uncertainty.py imports back from this module,
+        # and a top-level import either way would be circular.
+        from uncertainty import ehs_interval
+        result["ehs_interval"] = ehs_interval(
+            result["cumulative_doses_all"], mean_t_air)
     return result
 
 
@@ -733,6 +739,12 @@ def run_full_precision(weather_df, lat, lon, tz_name, start, finish, met_value,
     # [2026-08-13 patch] Same temperature-anchored-floor correction as
     # run_quick_estimate -- see _dose_response_pct_patched's docstring.
     summary["pct_dose_response_ehs"] = _dose_response_pct_patched(
+        summary["cumulative_doses_all"], mean_t_air)
+    # [2026-08-14] Same sampling + anchor interval as the quick path --
+    # see uncertainty.py's module docstring for what it does and does
+    # not cover. Lazy import: circular otherwise.
+    from uncertainty import ehs_interval
+    summary["ehs_interval"] = ehs_interval(
         summary["cumulative_doses_all"], mean_t_air)
     return {
         "n": len(all_results), "workers": workers, "elapsed_s": elapsed,
