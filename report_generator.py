@@ -18,7 +18,7 @@ what action to take, it doesn't belong in this report.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-13a"
+__BUILD__ = "2026-08-13f"
 
 import io
 from datetime import datetime
@@ -38,6 +38,124 @@ from docx.oxml.ns import qn
 # =============================================================================
 # Small formatting helpers
 # =============================================================================
+def dose_positive_count(hestia_result: dict) -> tuple[int, int]:
+    """(n_participants_with_dose_above_zero, n_total) from a HESTIA result
+    dict. Distinct PARTICIPANTS, not timestep-points -- the T_rect/CO_reserve
+    scatter's own caption already warns that its point count is per
+    timestep, which over-counts a participant who lingers in the danger
+    quadrant for several consecutive steps. This is the participant-level
+    count the headline EHS estimate is actually an average over."""
+    doses = hestia_result.get("cumulative_doses_all", []) if hestia_result else []
+    n_total = len(doses)
+    n_positive = sum(1 for d in doses if d is not None and d > 0)
+    return n_positive, n_total
+
+
+#: Below this many participants with a non-zero dose, the mean-of-logistic
+#: headline estimate is disproportionately shaped by one or two individuals
+#: rather than reflecting a broad pattern -- see the docstring on
+#: dose_response_ehs_probability's caller in hestia_bridge.py for why: the
+#: curve saturates near 1.0 for a high dose, so a single such participant
+#: can move the population mean by several points per 1000 on its own,
+#: regardless of how many simulations were run in total.
+DOSE_POSITIVE_WARNING_THRESHOLD = 10
+
+
+def dose_positive_warning_text(n_positive: int, n_total: int,
+                               broad_screen_pct: float | None = None,
+                               mean_t_air_c: float | None = None) -> str | None:
+    """Human-readable note if the EHS estimate needs context beyond the
+    bare number, or None if it can stand on its own. Two distinct cases,
+    both real and both worth surfacing -- shared wording between the live
+    app and the Word report:
+
+    n_positive == 0 : NONE of the simulated participants ever reached a
+    non-zero dose. [2026-08-13 patch] For this case the headline figure
+    is no longer the logistic curve's own fixed global intercept -- it is
+    Falmouth's own real-world temperature-only rate (falmouth_ehs_per_1000)
+    at today's actual race-window temperature, which now correctly scales
+    down at cooler temperatures instead of staying pinned at a constant
+    ~1.7 per 1000 regardless of how mild the day was. See
+    _dose_response_pct_patched's docstring in hestia_bridge.py for why a
+    full re-fit of the dose-slope itself was tried and NOT shipped (dose
+    and temperature turned out to be confounded at the reference
+    calibration scenario, leaving no way to identify a dose effect
+    separately from a temperature effect with the available data).
+
+    0 < n_positive < DOSE_POSITIVE_WARNING_THRESHOLD : the estimate is
+    real but rests on very few participants, so it may reflect a couple
+    of individuals rather than a broad pattern (see below). This case is
+    UNCHANGED by the patch -- dose>0 behaviour still uses the original
+    logistic curve.
+    """
+    if n_total == 0:
+        return None
+    if n_positive == 0:
+        if mean_t_air_c is not None:
+            floor_per_1000 = dose_response_ehs_probability_floor(mean_t_air_c)
+            floor_desc = (
+                f"Falmouth's own real-world rate at today's actual "
+                f"race-window temperature ({mean_t_air_c:.1f}\u00b0C): "
+                f"\u2248{floor_per_1000:.2f} per 1000"
+            )
+        else:
+            floor_per_1000 = 1000.0 * dose_response_ehs_probability(0.0)
+            floor_desc = (
+                f"the dose-response curve's own floor value "
+                f"(\u2248{floor_per_1000:.1f} per 1000)"
+            )
+        text = (
+            f"None of the {n_total} simulated participants ever reached a "
+            f"non-zero dose (T_rect\u226540.5\u00b0C AND CO_reserve\u22640, "
+            f"simultaneously, at any point). The figure above is not 0 "
+            f"because it is {floor_desc}. That floor is not arbitrary: it "
+            f"is Falmouth's own published temperature-only regression "
+            f"(DeMartini et al. 2014) evaluated at this scenario's own "
+            f"temperature, not something this simulation detected or "
+            f"measured. It may not transfer well to an event that differs "
+            f"from Falmouth in distance, field composition, or country. "
+            f"Read it as \u201cno elevated risk found beyond that "
+            f"background rate\u201d, not as a literal headcount for this "
+            f"event."
+        )
+        if broad_screen_pct is not None:
+            text += (
+                f" The broader cross-check (\u201cWorth monitoring, broad "
+                f"screen\u201d: T_rect\u226540.5\u00b0C OR dehydration\u22652% "
+                f"OR RPE\u226517, NOT gated by this same floor) reads "
+                f"{broad_screen_pct:.1f}% for this run \u2014 "
+            )
+            text += ("also near zero, consistent with nothing detected here."
+                     if broad_screen_pct < 5 else
+                     "not negligible, worth a closer look even though the "
+                     "dose-response figure above is only the floor value.")
+        return text
+    if n_positive < DOSE_POSITIVE_WARNING_THRESHOLD:
+        return (
+            f"Based on only {n_positive} of {n_total} simulated participants "
+            f"who ever reached a non-zero dose. At this small a count, the "
+            f"headline estimate can be dominated by one or two individuals "
+            f"rather than reflecting a broad pattern across the group -- it "
+            f"may say more about a couple of relatively unfit or hard-pushed "
+            f"individuals than about typical risk on this day. Increasing "
+            f"'Number of simulations' will show whether this number is a "
+            f"stable, repeatable feature of this population or mostly "
+            f"small-sample noise."
+        )
+    return None
+
+
+def dose_response_ehs_probability_floor(mean_t_air_c: float) -> float:
+    """[2026-08-13 patch] What a zero-dose participant is assigned, per
+    1000 -- now Falmouth's own real-world temperature-only rate at this
+    scenario's own temperature, not a fixed global constant. Imported
+    lazily (not at module load) to avoid a hard dependency from
+    report_generator.py on hestia_bridge.py for callers that never need
+    HESTIA at all (e.g. the pyrox-only test suite)."""
+    from hestia_bridge import falmouth_ehs_per_1000
+    return falmouth_ehs_per_1000(mean_t_air_c)
+
+
 def _set_cell_shading(cell, hex_colour: str):
     shd = cell._tc.get_or_add_tcPr().makeelement(qn("w:shd"), {
         qn("w:val"): "clear", qn("w:color"): "auto", qn("w:fill"): hex_colour,
@@ -667,6 +785,7 @@ def _add_per_level_section(doc, per_level_exposure, pyrox_result, label_for,
                     f"dose-response model over this scenario's actual "
                     f"simulated pace, duration and group."
                 ).italic = True
+                n_dose_pos, n_dose_total = dose_positive_count(hestia)
                 note_parts = []
                 if falmouth_est is not None:
                     note_parts.append(
@@ -680,6 +799,12 @@ def _add_per_level_section(doc, per_level_exposure, pyrox_result, label_for,
                     f"{hestia['pct_true_ehs_criterion']:.1f}% "
                     f"(\u2248{round(hestia['pct_true_ehs_criterion']*10):.0f} per 1000)"
                 )
+                if n_dose_total > 0:
+                    note_parts.append(
+                        f"based on {n_dose_pos} of {n_dose_total} simulated "
+                        f"participants (distinct participants, not "
+                        f"timestep-points) who ever reached a non-zero dose"
+                    )
                 _add_caption(doc, "For comparison \u2014 " + "; ".join(note_parts) + ". "
                                   "The dose-response model is a logistic curve over "
                                   "each participant's cumulative T_rect/CO_reserve "
@@ -692,6 +817,16 @@ def _add_per_level_section(doc, per_level_exposure, pyrox_result, label_for,
                                   "the danger quadrant, leaving less data to fit). "
                                   "EXPLORATORY: fit at n=120/scenario, well below "
                                   "production scale.")
+                dose_warning = dose_positive_warning_text(
+                    n_dose_pos, n_dose_total, hestia.get("pct_first_aid") if hestia else None,
+                    mean_t)
+                if dose_warning:
+                    icon = "\u2139\ufe0f" if n_dose_pos == 0 else "\u26a0\ufe0f"
+                    warn_p = doc.add_paragraph()
+                    warn_run = warn_p.add_run(icon + " " + dose_warning)
+                    warn_run.italic = True
+                    warn_run.font.color.rgb = (RGBColor(0x1e, 0x40, 0xaf) if n_dose_pos == 0
+                                               else RGBColor(0x7f, 0x1d, 0x1d))
 
             dist_chart = _hestia_distribution_chart(
                 hestia.get("peak_t_rect_all", []), level_label)
@@ -914,8 +1049,12 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
     dose_pct = hestia_result.get("pct_dose_response_ehs") if hestia_result else None
     falmouth_est = hestia_result.get("falmouth_ehs_per_1000") if hestia_result else None
     mean_t = hestia_result.get("mean_t_air_race_window") if hestia_result else None
+    broad_screen = hestia_result.get("pct_first_aid") if hestia_result else None
     if dose_pct is not None:
         _row("EHS estimate (dose-response model)", f"\u2248{dose_pct*10:.1f} per 1000")
+    if broad_screen is not None:
+        _row("Worth monitoring (broad screen: T_rect\u226540.5\u00b0C OR "
+             "dehydration\u22652% OR RPE\u226517)", f"{broad_screen:.1f}%")
 
     doc.add_paragraph()
 
@@ -949,6 +1088,7 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
             f"heat stroke, from a dose-response model over this scenario's "
             f"actual simulated pace, duration and group."
         ).italic = True
+        n_dose_pos, n_dose_total = dose_positive_count(hestia_result)
         note_parts = []
         if falmouth_est is not None:
             note_parts.append(
@@ -958,12 +1098,29 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
             )
         note_text = ("For comparison \u2014 " + "; ".join(note_parts) + ". "
                      if note_parts else "")
+        if n_dose_total > 0:
+            note_text += (
+                f"Based on {n_dose_pos} of {n_dose_total} simulated "
+                f"participants (distinct participants, not timestep-points) "
+                f"who ever reached a non-zero dose. "
+            )
         _add_caption(doc, note_text +
                           "EXPLORATORY calibration: fit at n=120 simulated "
                           "participants per scenario, well below production "
                           "scale. For the full methodology, raw/uncalibrated "
                           "figures, and multi-day PYROX context, see the PYROX "
                           "Participants view.")
+        dose_warning = dose_positive_warning_text(
+            n_dose_pos, n_dose_total,
+            hestia_result.get("pct_first_aid") if hestia_result else None,
+            mean_t)
+        if dose_warning:
+            icon = "\u2139\ufe0f" if n_dose_pos == 0 else "\u26a0\ufe0f"
+            warn_p = doc.add_paragraph()
+            warn_run = warn_p.add_run(icon + " " + dose_warning)
+            warn_run.italic = True
+            warn_run.font.color.rgb = (RGBColor(0x1e, 0x40, 0xaf) if n_dose_pos == 0
+                                       else RGBColor(0x7f, 0x1d, 0x1d))
 
     chart_specs = [
         (_t_rect_co_reserve_scatter(hestia_result.get("t_rect_co_reserve_pairs", []), level_label),
@@ -990,6 +1147,110 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
             doc.add_picture(chart_img, width=Cm(13.5))
             _add_caption(doc, caption)
             doc.add_paragraph()
+
+
+def generate_policy_prediction_excel_bytes(
+    city_name: str, lat: float, lon: float, tz_name: str,
+    exp_date, exp_start, weather_df: pd.DataFrame, levels_data: dict,
+    app_build: str,
+) -> bytes:
+    """A single-file PRE-EVENT prediction record for app_beleid.py, built
+    for LATER comparison against what actually happened -- mirrors
+    app_athletes.py's prediction_record_excel_bytes() in purpose, but
+    reads from levels_data (this app's own data shape) instead of a
+    PYROX multi-day result, for the same reason generate_policy_report_docx
+    is a separate function rather than a wrapper: app_beleid.py never
+    computes PYROX multi-day results, by design.
+
+    Why this exists: Streamlit Cloud's filesystem is ephemeral -- nothing
+    written server-side survives a reboot -- so without something the
+    reader downloads themselves, every prediction is lost the moment the
+    tab closes. This is also the concrete path from PROVISIONAL
+    calibration to something stronger, including for the dose-response
+    floor value: the ONLY way to check whether Falmouth's own background
+    incidence (baked into the curve when no participant reaches a
+    non-zero dose) actually holds for events like this one is to compare
+    it against real outcomes, gathered forward across many events rather
+    than asserted from one simulation.
+
+    Deliberately includes empty actual_* columns, so the SAME file can be
+    completed after the event rather than needing a second document.
+    """
+    from decision_support import exposure_by_flag, worst_flag, flag_display_name
+
+    buf = io.BytesIO()
+
+    def _strip_tz(df):
+        df = df.copy()
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
+        return df
+
+    made_at = pd.Timestamp.now(tz=tz_name)
+    meta = {
+        "prediction_made_at": made_at.strftime("%Y-%m-%d %H:%M %Z"),
+        "app_build": app_build,
+        "city": city_name, "lat": lat, "lon": lon, "timezone": tz_name,
+        "race_date": str(exp_date), "race_start_time": pd.Timestamp(exp_start).strftime("%H:%M"),
+        "note": ("This is a PRE-EVENT prediction from PYROX Beleid. Fill in "
+                "the 'actual_*' columns in the Per_Level sheet once real "
+                "outcomes are known, to build a comparison record over "
+                "time -- this is the only way to check whether the "
+                "dose-response floor value (Falmouth's own background "
+                "incidence, used when no simulated participant reaches a "
+                "non-zero dose) actually holds for events like this one."),
+    }
+
+    rows = []
+    for level_label, d in levels_data.items():
+        finish = d["finish"]
+        hestia = d.get("hestia_result")
+        exposure = exposure_by_flag(weather_df, exp_start, finish)
+        flag = worst_flag(exposure) if exposure else None
+        n_dose_pos, n_dose_total = dose_positive_count(hestia)
+
+        rows.append({
+            "level": level_label,
+            "start_time": pd.Timestamp(exp_start).strftime("%H:%M"),
+            "finish_time_est": pd.Timestamp(finish).strftime("%H:%M"),
+            "duration_minutes": d.get("duration_minutes"),
+            "met_value": d.get("met_value"),
+            "worst_wbgt_flag": flag_display_name(flag) if flag else "no data",
+            "ehs_estimate_dose_response_per_1000":
+                round(hestia["pct_dose_response_ehs"] * 10, 2)
+                if hestia and hestia.get("pct_dose_response_ehs") is not None else None,
+            "alternative_estimate_temp_only_per_1000":
+                round(hestia["falmouth_ehs_per_1000"], 2)
+                if hestia and hestia.get("falmouth_ehs_per_1000") is not None else None,
+            "n_participants_with_nonzero_dose": n_dose_pos if hestia else None,
+            "n_simulated_participants": n_dose_total if hestia else None,
+            "hestia_broad_screen_pct": round(hestia["pct_first_aid"], 1) if hestia else None,
+            "hestia_peak_t_re_mean_c": round(hestia["peak_t_rect_mean"], 2) if hestia else None,
+            "hestia_avg_capacity_remaining_pct":
+                round(hestia["pct_reserve_remaining_mean"], 1) if hestia else None,
+            "hestia_calibration_status":
+                "PROVISIONAL (dose-response, n=120/scenario in the fit, not "
+                "production-scale)" if hestia else "not calculated for this level in this run",
+            # Deliberately empty -- fill in once the real outcome is known.
+            "actual_first_aid_visits": None,
+            "actual_hospitalisations": None,
+            "actual_ehs_cases": None,
+            "actual_participant_count": None,
+            "notes": None,
+        })
+    per_level_df = pd.DataFrame(rows)
+
+    weather_window = weather_df[
+        (weather_df.index >= pd.Timestamp(exp_start) - pd.Timedelta(hours=6))
+        & (weather_df.index <= pd.Timestamp(exp_start) + pd.Timedelta(hours=6))
+    ]
+
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
+        pd.DataFrame([meta]).to_excel(writer, sheet_name="Metadata", index=False)
+        per_level_df.to_excel(writer, sheet_name="Per_Level", index=False)
+        _strip_tz(weather_window).to_excel(writer, sheet_name="Weather_Used")
+
+    return buf.getvalue()
 
 
 def generate_policy_report_docx(

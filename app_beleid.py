@@ -48,10 +48,11 @@ from hestia_model import PF_DUUR_MIN
 from report_generator import (
     _t_rect_co_reserve_scatter, _hestia_distribution_chart,
     _co_reserve_distribution_chart, dose_evolution_chart,
-    generate_policy_report_docx,
+    generate_policy_report_docx, dose_positive_count, dose_positive_warning_text,
+    generate_policy_prediction_excel_bytes,
 )
 
-APP_BUILD = "2026-08-13a (Word policy report)"
+APP_BUILD = "2026-08-13f (temperature-anchored floor)"
 
 
 # =============================================================================
@@ -411,8 +412,9 @@ if st.session_state.results and selected_levels:
         dose_pct = result.get("pct_dose_response_ehs")
         falmouth_est = result.get("falmouth_ehs_per_1000")
         mean_t = result.get("mean_t_air_race_window")
+        broad_screen = result.get("pct_first_aid")
         if dose_pct is not None:
-            c1, c2 = st.columns(2)
+            c1, c2, c3 = st.columns(3)
             c1.metric(
                 f"EHS estimate \u2014 {lvl}", f"\u2248{dose_pct*10:.1f} per 1000",
                 help="Dose-response model over this level's actual pace, "
@@ -438,6 +440,39 @@ if st.session_state.results and selected_levels:
                            "landing in the same range is reassuring, but "
                            "a difference between them does not mean "
                            "either one is wrong.")
+            if broad_screen is not None:
+                c3.metric(
+                    "Worth monitoring (broad screen)", f"{broad_screen:.1f}%",
+                    help="A deliberately WIDE screening flag: T_rect\u2265"
+                         "40.5\u00b0C OR dehydration\u22652% OR RPE\u226517 "
+                         "-- any one of the three, not the strict "
+                         "conjunctive EHS criterion the estimate on the "
+                         "left uses, and NOT gated by that criterion's "
+                         "dose-response floor value either. Useful as an "
+                         "independent cross-check: if this also reads near "
+                         "zero, that supports \u201cnothing detected\u201d; "
+                         "if it doesn't, that's worth a closer look even "
+                         "when the EHS estimate is only the floor value. "
+                         "Not a medical-incident-rate prediction on its "
+                         "own -- it is intentionally broad.")
+
+        n_dose_pos, n_dose_total = dose_positive_count(result)
+        if n_dose_total > 0:
+            st.caption(
+                f"\U0001F465 Estimate based on {n_dose_pos} of {n_dose_total} "
+                f"simulated participants who ever reached a non-zero dose "
+                f"(distinct participants, not timestep-points \u2014 the "
+                f"scatter plot below counts every timestep, so one "
+                f"participant lingering in the danger quadrant contributes "
+                f"several points there)."
+            )
+        dose_warning = dose_positive_warning_text(
+            n_dose_pos, n_dose_total, result.get("pct_first_aid"), mean_t)
+        if dose_warning:
+            if n_dose_pos == 0:
+                st.info(f"\u2139\ufe0f {dose_warning}")
+            else:
+                st.warning(f"\u26a0\ufe0f {dose_warning}")
 
         chart_cols = st.columns(2)
         pairs = result.get("t_rect_co_reserve_pairs", [])
@@ -522,4 +557,24 @@ if st.session_state.results and selected_levels:
              "raw/uncalibrated figures, no PROVISIONAL caveats, no "
              "multi-day PYROX context. Data and findings only, no "
              "recommended actions.",
+    )
+
+    st.download_button(
+        "\U0001F4E5 Download prediction record (Excel)",
+        data=generate_policy_prediction_excel_bytes(
+            city["name"], lat, lon, tz, exp_date, exp_start, forecast_df,
+            levels_data, APP_BUILD,
+        ),
+        file_name=f"pyrox_beleid_prediction_{city['name']}_{exp_date}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Saves this run's numbers with empty columns for the real "
+             "outcome (actual_first_aid_visits, actual_hospitalisations, "
+             "actual_ehs_cases), to fill in after the event. Streamlit "
+             "Cloud does not persist anything on its own -- download this "
+             "if you want to compare this prediction against reality "
+             "later. This is also the only way to actually check whether "
+             "the dose-response floor value (shown when no participant "
+             "reaches a non-zero dose) holds up: comparing predictions "
+             "like this one against real outcomes across many events, not "
+             "from any single simulation.",
     )

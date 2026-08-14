@@ -38,7 +38,7 @@ TWO FIXES CARRIED BY THIS BRIDGE (not by hestia_model.py's callers):
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-12a"
+__BUILD__ = "2026-08-13f"
 
 import multiprocessing
 import time
@@ -240,6 +240,11 @@ def falmouth_ehs_per_1000(mean_t_air_c: float) -> float:
 #: project) would be needed for a well-determined refit.
 _DOSE_RESPONSE_A = -6.3837
 _DOSE_RESPONSE_B = 0.4486
+#: [2026-08-13 patch] These two constants are UNCHANGED and still govern
+#: every dose>0 case. For dose==0, _dose_response_pct_patched() below
+#: overrides this curve's own (temperature-blind) floor with Falmouth's
+#: real temperature-only rate instead -- see that function's docstring
+#: for why a full re-fit of A/B together was attempted and not shipped.
 
 
 def cumulative_deficit_dose(res: list) -> float:
@@ -413,6 +418,49 @@ def dose_response_ehs_probability(dose: float) -> float:
     the jointly-fit logistic curve. See _DOSE_RESPONSE_A/B docstring for
     fit provenance and honest limitations."""
     return 1.0 / (1.0 + np.exp(-(_DOSE_RESPONSE_A + _DOSE_RESPONSE_B * dose)))
+
+
+def _dose_response_pct_patched(doses, mean_t_air_c: float) -> float:
+    """[2026-08-13 patch] Per-participant EHS probability, per 100 (i.e.
+    a percentage), with one targeted fix over the raw dose_response_ehs_
+    probability() curve: for a participant whose dose is exactly 0, use
+    Falmouth's own temperature-only regression (falmouth_ehs_per_1000) as
+    the floor instead of the logistic curve's fixed global intercept.
+
+    WHY: the global logistic's floor (dose=0 -> ~1.7 per 1000, from
+    _DOSE_RESPONSE_A) is CONSTANT regardless of ambient temperature,
+    because it was fit jointly across only 5 scenarios all sitting in
+    22-34degC -- it has no information about what happens outside that
+    range. Checked directly: at 5degC it still reads ~1.7 per 1000, while
+    Falmouth's own temperature curve (the same data source the logistic
+    was fit to match) gives ~0.01 per 1000 there -- a >100x gap, and
+    demonstrably the wrong direction for cold conditions.
+
+    NOT SHIPPED: a full replacement fitting a new dose-slope from scratch
+    against a temperature-anchored floor. Tried it (2026-08-13, session
+    notes): at the reference scenarios (MET~10.5, ~96min, 22-34degC),
+    forcing the floor to exactly equal the Falmouth temperature target
+    leaves the joint fit no room for a positive dose-slope to add
+    anything without overshooting the target -- at this reference
+    condition, dose and temperature are essentially confounded (dose only
+    turns non-zero at the hot end, since MET is held fixed), so the
+    fitted slope collapses to ~0. Properly separating a dose effect from
+    a temperature effect needs scenarios where they're NOT confounded --
+    e.g. a hot/easy-pace vs a cool/hard-pace comparison, which is exactly
+    the kind of scenario this app surfaced in practice (a fast recreational
+    pace reaching the danger criterion mid-race at only moderate ambient
+    temperature). That is a genuine follow-up calibration task, not
+    something this patch invents a number for.
+
+    This patch therefore leaves dose>0 behaviour COMPLETELY UNCHANGED
+    (still the original, imperfect global logistic) and only corrects the
+    dose=0 case, which is both the most common case in practice and the
+    one with an unambiguous, directly-checkable real-data answer.
+    """
+    doses = np.asarray(doses, dtype=float)
+    floor = falmouth_ehs_per_1000(mean_t_air_c) / 1000.0
+    probs = np.where(doses > 0, dose_response_ehs_probability(doses), floor)
+    return float(100.0 * np.mean(probs))
 
 
 def _summarize_results(all_results: list) -> dict:
@@ -622,6 +670,12 @@ def run_quick_estimate(weather_df: pd.DataFrame, lat: float, lon: float, tz_name
         result = dict(result)  # cached dict is shared -- don't mutate it in place
         result["mean_t_air_race_window"] = mean_t_air
         result["falmouth_ehs_per_1000"] = falmouth_ehs_per_1000(mean_t_air)
+        # [2026-08-13 patch] Recompute the headline % with the
+        # temperature-anchored floor -- see _dose_response_pct_patched's
+        # docstring. Only the dose=0 case changes; unaffected if every
+        # dose was already positive.
+        result["pct_dose_response_ehs"] = _dose_response_pct_patched(
+            result["cumulative_doses_all"], mean_t_air)
     return result
 
 
@@ -676,6 +730,10 @@ def run_full_precision(weather_df, lat, lon, tz_name, start, finish, met_value,
     mean_t_air = float(np.mean([row["temp"] for row in interp_data]))
     summary["mean_t_air_race_window"] = mean_t_air
     summary["falmouth_ehs_per_1000"] = falmouth_ehs_per_1000(mean_t_air)
+    # [2026-08-13 patch] Same temperature-anchored-floor correction as
+    # run_quick_estimate -- see _dose_response_pct_patched's docstring.
+    summary["pct_dose_response_ehs"] = _dose_response_pct_patched(
+        summary["cumulative_doses_all"], mean_t_air)
     return {
         "n": len(all_results), "workers": workers, "elapsed_s": elapsed,
         "aqi_used": aqi,
@@ -798,6 +856,35 @@ def render_hestia_section(st_module, weather_df: pd.DataFrame, lat: float, lon: 
                 "generalise this far -- treat this number with extra "
                 "caution here, more so than usual."
             )
+
+        # [2026-08-13] Distinct-participant count behind the headline
+        # number, not timestep-points -- the dose-response mean is a mean
+        # of a per-participant logistic curve that saturates near 1.0 for
+        # a high dose, so a headline figure can be dominated by one or two
+        # individuals rather than a broad pattern when few participants
+        # ever accumulate a non-zero dose. See report_generator.py's
+        # dose_positive_count/dose_positive_warning_text for the Word-
+        # report equivalent of this same signal.
+        doses_all = quick.get("cumulative_doses_all", [])
+        n_dose_total = len(doses_all)
+        n_dose_pos = sum(1 for d in doses_all if d is not None and d > 0)
+        if n_dose_total > 0:
+            st_module.caption(
+                f"\U0001F465 Estimate based on {n_dose_pos} of {n_dose_total} "
+                f"simulated participants who ever reached a non-zero dose "
+                f"(distinct participants, not timestep-points)."
+            )
+        # [2026-08-13] Delegates to report_generator.py's
+        # dose_positive_warning_text so this wording can never silently
+        # drift from the Word-report version of the same signal.
+        from report_generator import dose_positive_warning_text
+        dose_warning = dose_positive_warning_text(
+            n_dose_pos, n_dose_total, quick.get("pct_first_aid"), mean_t)
+        if dose_warning:
+            if n_dose_pos == 0:
+                st_module.info(f"\u2139\ufe0f {dose_warning}")
+            else:
+                st_module.warning(f"\u26a0\ufe0f {dose_warning}")
         note_parts = []
         if falmouth_est is not None:
             note_parts.append(
