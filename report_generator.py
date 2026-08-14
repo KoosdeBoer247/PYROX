@@ -18,7 +18,7 @@ what action to take, it doesn't belong in this report.
 
 from __future__ import annotations
 
-__BUILD__ = "2026-08-13f"
+__BUILD__ = "2026-08-14a"
 
 import io
 from datetime import datetime
@@ -1152,7 +1152,7 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
 def generate_policy_prediction_excel_bytes(
     city_name: str, lat: float, lon: float, tz_name: str,
     exp_date, exp_start, weather_df: pd.DataFrame, levels_data: dict,
-    app_build: str,
+    app_build: str, is_hindcast: bool = False,
 ) -> bytes:
     """A single-file PRE-EVENT prediction record for app_beleid.py, built
     for LATER comparison against what actually happened -- mirrors
@@ -1188,13 +1188,20 @@ def generate_policy_prediction_excel_bytes(
 
     made_at = pd.Timestamp.now(tz=tz_name)
     meta = {
+        "record_type": "HINDCAST (observed weather, past event)" if is_hindcast
+                       else "PRE-EVENT PREDICTION (forecast weather)",
         "prediction_made_at": made_at.strftime("%Y-%m-%d %H:%M %Z"),
         "app_build": app_build,
         "city": city_name, "lat": lat, "lon": lon, "timezone": tz_name,
         "race_date": str(exp_date), "race_start_time": pd.Timestamp(exp_start).strftime("%H:%M"),
-        "note": ("This is a PRE-EVENT prediction from PYROX Beleid. Fill in "
-                "the 'actual_*' columns in the Per_Level sheet once real "
-                "outcomes are known, to build a comparison record over "
+        "note": (("This is a HINDCAST run using observed historical weather "
+                 "for a date that has already passed -- fill in the "
+                 "'actual_*' columns from the real, known outcome to check "
+                 "this model's prediction against it directly. "
+                 if is_hindcast else
+                 "This is a PRE-EVENT prediction from PYROX Beleid. ") +
+                "Fill in the 'actual_*' columns in the Per_Level sheet once "
+                "real outcomes are known, to build a comparison record over "
                 "time -- this is the only way to check whether the "
                 "dose-response floor value (Falmouth's own background "
                 "incidence, used when no simulated participant reaches a "
@@ -1256,6 +1263,7 @@ def generate_policy_prediction_excel_bytes(
 def generate_policy_report_docx(
     city_name: str, exp_date, exp_start, weather_df: pd.DataFrame,
     levels_data: dict, tz_name: str, app_build: str,
+    is_hindcast: bool = False,
 ) -> bytes:
     """Word report for app_beleid.py (the simplified policy/organiser
     view). Deliberately a SEPARATE entry point from generate_report_docx()
@@ -1281,8 +1289,21 @@ def generate_policy_report_docx(
     section.left_margin = section.right_margin = Cm(2.2)
 
     generated_at = pd.Timestamp.now(tz=tz_name)
+    title = ("PYROX \u2014 Policy Report (HINDCAST, observed weather)"
+             if is_hindcast else "PYROX \u2014 Policy Report")
     _add_title_section(doc, city_name, exp_start, generated_at, app_build,
-                       report_title="PYROX \u2014 Policy Report")
+                       report_title=title)
+    if is_hindcast:
+        note = doc.add_paragraph()
+        note.add_run(
+            "\U0001F4DC HINDCAST: this report uses observed historical "
+            "weather (Open-Meteo archive) for a date that has already "
+            "passed, not a forecast. Intended for checking this model's "
+            "prediction against a real, known event -- e.g. comparing "
+            "against an actual_* outcome logged in a prediction record for "
+            "the same date."
+        ).italic = True
+        doc.add_paragraph()
     _add_day_overview_section(doc, weather_df, exp_date, exp_start)
 
     for level_label, d in levels_data.items():

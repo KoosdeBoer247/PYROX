@@ -18,6 +18,14 @@ Shown:
   - Peak T_re and CO_reserve distributions
   - How risk builds over time for representative participants
 
+An optional "Historical (hindcast)" weather source (alongside the default
+forecast) lets this page re-run a past date using observed weather from
+the Open-Meteo archive, rather than an upcoming forecast -- for checking
+a prediction against a real, already-known event. Everything downstream
+(charts, EHS estimate, Word report, Excel prediction record) is identical
+either way; only the weather source and the exported files' own labelling
+change.
+
 Deliberately NOT shown: raw/uncalibrated HESTIA figures, the PROVISIONAL
 calibration caveats, multi-day PYROX context, GPX course analysis, the
 evidence panel, cross-check explanations. Those stay in app_athletes.py
@@ -25,7 +33,7 @@ for the audience that needs the full methodology.
 """
 
 import time
-from datetime import timedelta
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -52,7 +60,7 @@ from report_generator import (
     generate_policy_prediction_excel_bytes,
 )
 
-APP_BUILD = "2026-08-13f (temperature-anchored floor)"
+APP_BUILD = "2026-08-14a (historical/hindcast mode)"
 
 
 # =============================================================================
@@ -178,7 +186,35 @@ with st.sidebar:
     )
     roughness_z0 = ROUGHNESS_Z0_TERRAIN[terrain_key][1]
 
-    forecast_days = st.slider("Forecast period (days)", 1, 16, 7)
+    st.divider()
+    data_mode = st.radio(
+        "Weather source", options=["Forecast (upcoming)", "Historical (hindcast)"],
+        index=0,
+        help="Forecast: upcoming weather via Open-Meteo, for planning an "
+             "event ahead of time. Historical: observed weather from the "
+             "Open-Meteo archive for a past date range, for checking this "
+             "model's prediction against a real event that already "
+             "happened -- e.g. re-running a past race day and comparing "
+             "against the actual outcome logged in a prediction record "
+             "(see the download button below).",
+    )
+    use_historical = data_mode.startswith("Historical")
+    forecast_days = 7
+    hist_start, hist_end = None, None
+    if use_historical:
+        default_end = date.today() - timedelta(days=1)
+        default_start = default_end - timedelta(days=6)
+        hc1, hc2 = st.columns(2)
+        with hc1:
+            hist_start = st.date_input("Historical start", value=default_start,
+                                       max_value=date.today() - timedelta(days=1))
+        with hc2:
+            hist_end = st.date_input("Historical end", value=default_end,
+                                     max_value=date.today() - timedelta(days=1))
+        if hist_start > hist_end:
+            st.warning("Historical start date must be before the end date.")
+    else:
+        forecast_days = st.slider("Forecast period (days)", 1, 16, 7)
 
     st.divider()
     # Runner type is deliberately fixed to "Recreational runner" on this
@@ -295,12 +331,20 @@ if st.session_state.candidates:
 
     with st.spinner("Fetching weather and computing thermal indices..."):
         try:
-            forecast_df, f_coastal = cached_forecast(lat, lon, tz, forecast_days)
-            forecast_df = validate_weather_data(forecast_df, "forecast")
-            forecast_df = process_weather_data(
-                forecast_df, city, lat, lon, tz,
-                coastal_active=f_coastal, roughness_z0=roughness_z0)
-            st.session_state.results = {"forecast": forecast_df}
+            if use_historical:
+                if hist_start > hist_end:
+                    raise ValueError("Historical start date must be before the end date.")
+                weather_df, w_coastal = cached_historical(
+                    lat, lon, tz, hist_start.strftime("%Y-%m-%d"),
+                    hist_end.strftime("%Y-%m-%d"))
+                weather_df = validate_weather_data(weather_df, "historical")
+            else:
+                weather_df, w_coastal = cached_forecast(lat, lon, tz, forecast_days)
+                weather_df = validate_weather_data(weather_df, "forecast")
+            weather_df = process_weather_data(
+                weather_df, city, lat, lon, tz,
+                coastal_active=w_coastal, roughness_z0=roughness_z0)
+            st.session_state.results = {"forecast": weather_df, "is_historical": use_historical}
         except RateLimitError:
             st.error("\u23f3 Open-Meteo rate limit reached. Wait a few minutes and try again.")
             st.session_state.results = None
@@ -310,6 +354,15 @@ if st.session_state.candidates:
 
 if st.session_state.results and selected_levels:
     forecast_df = st.session_state.results["forecast"]
+    is_historical = st.session_state.results.get("is_historical", False)
+
+    if is_historical:
+        st.info(
+            "\U0001F4DC **Hindcast mode** \u2014 this analysis uses observed "
+            "historical weather (Open-Meteo archive), not a forecast. Use "
+            "this to check the model's prediction against a real event "
+            "that already happened."
+        )
 
     st.markdown("### \U0001F4C5 Race date & start time")
     ec1, ec2 = st.columns(2)
@@ -547,9 +600,11 @@ if st.session_state.results and selected_levels:
         "\U0001F4C4 Download policy report (Word)",
         data=generate_policy_report_docx(
             city["name"], exp_date, exp_start, forecast_df, levels_data,
-            tz, APP_BUILD,
+            tz, APP_BUILD, is_hindcast=is_historical,
         ),
-        file_name=f"pyrox_beleid_report_{city['name']}_{exp_date}.docx",
+        file_name=(f"pyrox_beleid_hindcast_{city['name']}_{exp_date}.docx"
+                  if is_historical else
+                  f"pyrox_beleid_report_{city['name']}_{exp_date}.docx"),
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         help="A Word report: the chosen day overall, then a zoomed section "
              "per level from its own start time through the race and "
@@ -563,9 +618,11 @@ if st.session_state.results and selected_levels:
         "\U0001F4E5 Download prediction record (Excel)",
         data=generate_policy_prediction_excel_bytes(
             city["name"], lat, lon, tz, exp_date, exp_start, forecast_df,
-            levels_data, APP_BUILD,
+            levels_data, APP_BUILD, is_hindcast=is_historical,
         ),
-        file_name=f"pyrox_beleid_prediction_{city['name']}_{exp_date}.xlsx",
+        file_name=(f"pyrox_beleid_hindcast_record_{city['name']}_{exp_date}.xlsx"
+                  if is_historical else
+                  f"pyrox_beleid_prediction_{city['name']}_{exp_date}.xlsx"),
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         help="Saves this run's numbers with empty columns for the real "
              "outcome (actual_first_aid_visits, actual_hospitalisations, "

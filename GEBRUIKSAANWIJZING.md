@@ -23,6 +23,28 @@ minder behoefte aan, en te veel methodologie op het verkeerde moment leidt
 juist af van de beslissing die genomen moet worden. Wie de volledige
 onderbouwing wil, gebruikt PYROX Participants.
 
+**Sinds build 2026-08-14a** heeft PYROX Beleid ook een hindcast-modus: in
+de zijbalk kun je "Weather source" op "Historical (hindcast)" zetten en
+een datumbereik in het verleden kiezen. De app haalt dan waargenomen
+historische data op (Open-Meteo-archief) in plaats van een voorspelling,
+en draait verder exact dezelfde analyse — inclusief het Word-rapport en
+het voorspellingsrecord, die in dat geval zelf duidelijk als "HINDCAST"
+gelabeld worden. Dit is bedoeld om de modelvoorspelling tegen een al
+bekende, echte gebeurtenis te leggen (bijvoorbeeld een eerder evenement
+waarvan je de daadwerkelijke EHS-cijfers al hebt), niet om vooruit te
+plannen.
+
+Ook is er sinds build 2026-08-13f-2026-08-13c een deelnemersteller onder
+het EHS-hoofdgetal ("👥 Estimate based on X of Y simulated participants
+who ever reached a non-zero dose"), met een waarschuwing bij een klein
+aantal en een aparte uitleg wanneer dat aantal 0 is (dan toont het cijfer
+Falmouths eigen temperatuurgebonden achtergrondincidentie, niet iets dat
+de simulatie zelf heeft gedetecteerd — zie de ℹ️-melding in de app zelf
+voor de volledige uitleg). Daarnaast staat er een "Worth monitoring
+(broad screen)"-kruiscontrole naast het hoofdgetal, en twee downloadknoppen
+onderaan: een Word-rapport en een Excel-voorspellingsrecord met lege
+`actual_*`-kolommen om na afloop van een evenement in te vullen.
+
 Als dit je eerste keer is: lees eerst **§1 Snelstart**, en kom pas terug
 naar de rest als je specifieke vragen hebt. Je hoeft niet alles te
 begrijpen om de app zinnig te gebruiken.

@@ -4,12 +4,20 @@ Deze handleiding beschrijft hoe je dit project beheert zonder opnieuw in de
 valkuilen te lopen die we onderweg zijn tegengekomen. Elke waarschuwing hierin
 staat er omdat het één keer is misgegaan.
 
-Versie van deze set: **build 2026-08-12c**
+Versie van deze set: **build 2026-08-14a**
 Laatst geverifieerd: alle modules compileren, alle acceptatietests slagen,
 alle drie de apps starten zonder fouten. Let op: `app.py` en
 `app_athletes.py` staan op buildstempel 2026-08-12a, `app_beleid.py` op
-2026-08-12c — verschillende bestanden mogen verschillende buildstempels
+2026-08-14a — verschillende bestanden mogen verschillende buildstempels
 hebben, zolang elk bestand zijn eigen stempel maar ophoogt bij een wijziging
+
+**Sinds 2026-08-14a, kort:** `app_beleid.py` heeft nu ook een hindcast-
+modus (zijbalk: "Weather source" → "Historical (hindcast)"), waarmee je
+dezelfde analyse op een datum in het verleden kunt draaien met
+waargenomen weerdata in plaats van een voorspelling — voor het toetsen
+van een voorspelling tegen een al bekende gebeurtenis. Het Word-rapport en
+het voorspellingsrecord (Excel) labelen zichzelf dan automatisch als
+"HINDCAST". Zie GEBRUIKSAANWIJZING.md voor de volledige uitleg.
 (zie §7).
 
 **Sinds 2026-08-12c, kort:** een derde app is toegevoegd, `app_beleid.py` —
