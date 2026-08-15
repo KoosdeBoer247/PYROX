@@ -250,6 +250,33 @@ def _build_profile(inputs: PersonalInputs, rng: np.random.Generator) -> AdultPar
 # =============================================================================
 # Weather + geocoding (the ONLY network calls in this module's call graph)
 # =============================================================================
+def _localize_naive(ts: pd.Timestamp, tz: str) -> pd.Timestamp:
+    """Attach the event's timezone to a naive local-wall-clock Timestamp.
+
+    EventScenario.start_local is deliberately naive -- the UI form has no
+    way to know the event's timezone until AFTER geocoding resolves it,
+    so it can only hand over "what the user typed", not a fully-qualified
+    instant. Every place that later compares this timestamp against a
+    tz-aware value (weather_df's index, or pd.Timestamp.now(tz=...)) MUST
+    localize it first, through this one function, so there is exactly
+    one interpretation of "naive local time" in this module -- not two
+    independently-written tz_localize() calls that could quietly drift
+    apart. See run_individual_assessment()'s own docstring note for the
+    bug this fixes: comparing a naive Timestamp against a tz-aware one
+    via .astype('int64') does not raise an error, it silently shifts the
+    whole race window by the local UTC offset (1-2 hours for the
+    Netherlands, CET/CEST) with no error message at all.
+
+    ambiguous=True (not 'infer', which Thermopoulos_Data_Engine.py uses
+    but which is only valid on a DatetimeIndex -- inferring a DST fold
+    needs multiple consecutive points, a single Timestamp has none) picks
+    the DST-active interpretation for the one hour each autumn that
+    occurs twice. For a single scheduled event time this is a rare edge
+    case either way; documented here rather than silently defaulted.
+    """
+    return ts.tz_localize(tz, nonexistent="shift_forward", ambiguous=True)
+
+
 def fetch_scenario_weather(scenario: EventScenario):
     """Geocode the location and fetch weather for the event window.
 
@@ -271,7 +298,8 @@ def fetch_scenario_weather(scenario: EventScenario):
             finish_local.strftime("%Y-%m-%d"))
         weather_df = validate_weather_data(weather_df, "historical")
     else:
-        days_ahead = max(1, (finish_local.normalize() - pd.Timestamp.now(tz=tz).normalize()).days + 1)
+        days_ahead = max(1, (_localize_naive(finish_local, tz).normalize()
+                              - pd.Timestamp.now(tz=tz).normalize()).days + 1)
         weather_df, coastal = fetch_hourly_forecast(lat, lon, tz, days_ahead)
         weather_df = validate_weather_data(weather_df, "forecast")
 
@@ -279,6 +307,8 @@ def fetch_scenario_weather(scenario: EventScenario):
         weather_df, city, lat, lon, tz, coastal_active=coastal,
         roughness_z0=ROUGHNESS_Z0_TERRAIN[scenario.terrain_key][1])
     return weather_df, city, lat, lon, tz
+
+
 
 
 # =============================================================================
@@ -325,7 +355,19 @@ def run_individual_assessment(
 
     weather_df, city, lat, lon, tz = fetch_scenario_weather(scenario)
     finish_local = scenario.start_local + pd.Timedelta(minutes=scenario.duration_minutes)
-    interp_data = build_interp_data(weather_df, scenario.start_local, finish_local)
+    # CRITICAL: weather_df's index is tz-aware (localized to the event's
+    # own timezone by Thermopoulos_Data_Engine.py). scenario.start_local/
+    # finish_local are tz-naive by construction (see EventScenario's
+    # docstring). Comparing a naive and an aware timestamp via
+    # build_interp_data's internal .astype('int64') does NOT raise an
+    # error -- it silently shifts the whole race window by the local UTC
+    # offset (1-2 hours for CET/CEST), with no warning anywhere. Confirmed
+    # directly: at 10:30 local, the unlocalized version fed the simulation
+    # the 12:30 local reading instead. Must localize before calling
+    # build_interp_data, every time, via the same helper used above.
+    start_aware = _localize_naive(scenario.start_local, tz)
+    finish_aware = _localize_naive(finish_local, tz)
+    interp_data = build_interp_data(weather_df, start_aware, finish_aware)
     mean_t_air = float(np.mean([row["temp"] for row in interp_data]))
 
     # MET for the liveability check only (see calculate_indices_jos3_adult's

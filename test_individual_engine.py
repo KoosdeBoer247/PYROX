@@ -55,6 +55,64 @@ def _check(name: str, cond: bool, detail: str = "") -> bool:
     return cond
 
 
+def test_timezone_localization() -> bool:
+    """Regression test for the bug found 2026-08-15 on Streamlit Cloud
+    (forecast branch, Utrecht scenario): EventScenario.start_local is
+    tz-naive by design (the form can't know the event timezone before
+    geocoding resolves it), while weather_df's index is tz-aware. Two
+    distinct failures came from that mismatch:
+
+      1. A raised exception in the forecast day-count calculation
+         ("Cannot subtract tz-naive and tz-aware datetime-like
+         objects") -- loud, easy to notice.
+      2. A SILENT ~1-2 hour shift of the entire race window in
+         build_interp_data(), caught only by manually reconstructing
+         the exact interpolation and checking the returned temperature
+         against a known-distinct value per hour. This kind of bug
+         raises no exception at all -- only this kind of numeric check
+         catches it, which is why it is pinned here permanently rather
+         than left to be re-discovered by chance.
+
+    Every prior screenshot in this project's history that used live
+    weather (Amsterdam Sept 2024, the first Utrecht run) was silently
+    affected by failure #2 before this fix.
+    """
+    print("Timezone localization (silent race-window shift regression)")
+    ok = True
+
+    tz = "Europe/Amsterdam"
+    naive_hours = pd.date_range("2026-05-31 06:00", periods=12, freq="h")
+    weather_index = naive_hours.tz_localize(tz, nonexistent="shift_forward", ambiguous="infer")
+    weather_df = pd.DataFrame({"T_air_urban": np.arange(6, 18)}, index=weather_index)
+
+    from individual_engine import _localize_naive
+    from hestia_bridge import build_interp_data
+
+    start_local = pd.Timestamp("2026-05-31 10:30")   # naive, exactly what a form gives
+    finish_local = start_local + pd.Timedelta(minutes=60)
+    start_aware = _localize_naive(start_local, tz)
+    finish_aware = _localize_naive(finish_local, tz)
+    interp = build_interp_data(weather_df, start_aware, finish_aware, interval_minutes=30)
+
+    ok &= _check("10:30 local resolves to ~10.5\u00b0C, not the 12:30 reading (12.5\u00b0C)",
+                 9.9 <= interp[0]["temp"] <= 11.1, f"got {interp[0]['temp']}")
+
+    # Winter (CET, UTC+1) must be handled too -- tz_localize reads the
+    # correct offset per-date from the tz database automatically, but
+    # worth pinning both seasons since CEST/CET is exactly the kind of
+    # thing that can silently regress if _localize_naive is ever
+    # bypassed for one call site and not another.
+    winter_hours = pd.date_range("2026-01-15 06:00", periods=12, freq="h")
+    winter_index = winter_hours.tz_localize(tz, nonexistent="shift_forward", ambiguous="infer")
+    winter_df = pd.DataFrame({"T_air_urban": np.arange(0, 12)}, index=winter_index)
+    w_start = _localize_naive(pd.Timestamp("2026-01-15 09:00"), tz)
+    w_finish = _localize_naive(pd.Timestamp("2026-01-15 09:30"), tz)
+    w_interp = build_interp_data(winter_df, w_start, w_finish, interval_minutes=30)
+    ok &= _check("winter (CET) 09:00 local resolves to ~3\u00b0C, not a 1h-shifted reading",
+                 2.9 <= w_interp[0]["temp"] <= 3.1, f"got {w_interp[0]['temp']}")
+    return ok
+
+
 def test_no_missing_required_args() -> bool:
     """Generic signature-compatibility check: every required keyword of
     process_weather_data() must appear in fetch_scenario_weather()'s
@@ -148,6 +206,7 @@ def test_personal_ensemble_pipeline() -> bool:
 
 if __name__ == "__main__":
     results = [
+        test_timezone_localization(),
         test_no_missing_required_args(),
         test_storage_roundtrip(),
         test_personal_ensemble_pipeline(),
