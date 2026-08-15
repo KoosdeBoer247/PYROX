@@ -192,6 +192,7 @@ def save_assessment(profile_name: str, scenario: EventScenario,
             "use_historical": scenario.use_historical,
             "gpx_path": scenario.gpx_path,
             "clo_value": scenario.clo_value,
+            "terrain_key": scenario.terrain_key,
         },
         "assessment": _assessment_to_jsonable(assessment, include_traces),
     }
@@ -232,5 +233,6 @@ def load_assessment(path: Path) -> tuple[EventScenario, IndividualAssessment]:
         use_historical=s["use_historical"],
         gpx_path=s.get("gpx_path"),
         clo_value=s.get("clo_value", 0.2),
+        terrain_key=s.get("terrain_key", "3"),
     )
     return scenario, assessment_from_jsonable(payload["assessment"])

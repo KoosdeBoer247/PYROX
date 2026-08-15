@@ -30,6 +30,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from individual_engine import PersonalInputs, EventScenario, run_individual_assessment, assessment_caveats
+from Thermopoulos_Data_Engine import ROUGHNESS_Z0_TERRAIN
 import local_storage as store
 
 st.set_page_config(page_title="PYROX \u2014 Personal", page_icon="\U0001F3C3", layout="wide")
@@ -169,11 +170,21 @@ with e4:
 with e5:
     duration_minutes = st.number_input("Duur (minuten)", 10, 600, value=100)
 
+terrain_key = st.selectbox(
+    "Terreintype (10m \u2192 1,5m windprofiel)",
+    options=list(ROUGHNESS_Z0_TERRAIN.keys()),
+    format_func=lambda k: ROUGHNESS_Z0_TERRAIN[k][0],
+    index=2,
+    help="Zelfde terreincategorie\u00ebn als de beleidsweergave; be\u00efnvloedt alleen "
+         "de windcorrectie tussen de 10m-meethoogte en loophoogte.",
+)
+
 scenario = EventScenario(
     location_query=location_query,
     start_local=pd.Timestamp.combine(event_date, event_time),
     duration_minutes=float(duration_minutes),
     use_historical=use_historical,
+    terrain_key=terrain_key,
 )
 
 with st.expander("Geavanceerd"):

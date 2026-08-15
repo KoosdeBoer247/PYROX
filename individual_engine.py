@@ -88,6 +88,7 @@ from hestia_model import (
     calculate_indices_jos3_adult,
 )
 from Thermopoulos_Data_Engine import (
+    ROUGHNESS_Z0_TERRAIN,
     geocode_city_candidates,
     fetch_hourly_forecast,
     fetch_historical_data,
@@ -162,6 +163,12 @@ class EventScenario:
                                         # run_quick_estimate's clo_value note
                                         # in hestia_bridge.py for why 0.2,
                                         # not the old 0.5 indoor-clothing value.
+    terrain_key: str = "3"             # ROUGHNESS_Z0_TERRAIN key (Thermopoulos_
+                                        # Data_Engine.py). "3" = open agricultural
+                                        # terrain, scattered obstacles -- same
+                                        # default app_beleid.py's dropdown starts
+                                        # on (index=2). Controls the 10m->1.5m
+                                        # wind-profile correction only.
 
 
 # =============================================================================
@@ -267,7 +274,9 @@ def fetch_scenario_weather(scenario: EventScenario):
         weather_df, coastal = fetch_hourly_forecast(lat, lon, tz, days_ahead)
         weather_df = validate_weather_data(weather_df, "forecast")
 
-    weather_df = process_weather_data(weather_df, city, lat, lon, tz, coastal_active=coastal)
+    weather_df = process_weather_data(
+        weather_df, city, lat, lon, tz, coastal_active=coastal,
+        roughness_z0=ROUGHNESS_Z0_TERRAIN[scenario.terrain_key][1])
     return weather_df, city, lat, lon, tz
 
 
