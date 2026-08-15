@@ -99,6 +99,7 @@ from hestia_bridge import (
     build_interp_data,
     cumulative_deficit_dose,
     dose_response_ehs_probability,
+    participant_trace,
 )
 import uncertainty as _unc
 
@@ -388,6 +389,36 @@ def run_individual_assessment(
         city_name=f"{city['name']}, {city.get('country', '')}".strip(", "),
         all_traces=all_traces,
     )
+
+
+def dose_scatter_points(all_traces: list) -> dict:
+    """T_rect / CO_reserve / cumulative-dose triples across every
+    (ensemble member, timestep) combination -- data only, no plotting.
+
+    Reuses hestia_bridge.participant_trace() rather than re-deriving
+    dose accumulation here, so there is exactly one implementation of
+    "how dose builds over time", shared with the population apps'
+    dose-evolution chart.
+
+    IMPORTANT for interpretation: each point's dose is the CUMULATIVE
+    dose up to that timestep along that ensemble member's own
+    trajectory -- not a fixed per-point severity, and not that member's
+    single final total. A given member's points sweep from dose=0
+    toward their own final_dose as their simulated race progresses;
+    colour them accordingly rather than reading each point as an
+    independent "total".
+    """
+    t_all, c_all, d_all = [], [], []
+    for res in all_traces:
+        tr = participant_trace(res)
+        t_all.extend(tr["t"])
+        c_all.extend(tr["c"])
+        d_all.extend(tr["dose"])
+    return {
+        "t_rect": np.array(t_all),
+        "co_reserve": np.array(c_all),
+        "dose": np.array(d_all),
+    }
 
 
 def assessment_caveats(a: IndividualAssessment) -> list[str]:

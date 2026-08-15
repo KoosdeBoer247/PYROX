@@ -29,7 +29,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from individual_engine import PersonalInputs, EventScenario, run_individual_assessment, assessment_caveats
+from individual_engine import (
+    PersonalInputs, EventScenario, run_individual_assessment,
+    assessment_caveats, dose_scatter_points,
+)
 from Thermopoulos_Data_Engine import ROUGHNESS_Z0_TERRAIN
 import local_storage as store
 
@@ -271,14 +274,63 @@ if result is not None:
                          yaxis_title="L/min", height=350, margin=dict(t=40, b=20))
     st.plotly_chart(fig_c, use_container_width=True)
 
+    scatter_data = dose_scatter_points(result.all_traces)
+    if len(scatter_data["t_rect"]) > 0:
+        t_vals, c_vals, d_vals = scatter_data["t_rect"], scatter_data["co_reserve"], scatter_data["dose"]
+        x_min, x_max = min(37.0, float(t_vals.min()) - 0.2), max(41.5, float(t_vals.max()) + 0.2)
+        y_min, y_max = min(-1.0, float(c_vals.min()) - 0.3), max(3.0, float(c_vals.max()) + 0.3)
+        max_dose = float(d_vals.max()) if len(d_vals) else 0.0
+
+        fig_s = go.Figure()
+        fig_s.add_shape(type="rect", x0=40.5, x1=x_max, y0=y_min, y1=0,
+                         fillcolor="rgba(127,0,0,0.12)", line_width=0, layer="below")
+        fig_s.add_hline(y=0, line_dash="dot", line_color="#94a3b8")
+        fig_s.add_vline(x=40.5, line_dash="dot", line_color="#94a3b8")
+        fig_s.add_trace(go.Scatter(
+            x=t_vals, y=c_vals, mode="markers",
+            marker=dict(size=5, color=d_vals, colorscale="OrRd", showscale=True,
+                        cmin=0, cmax=max(max_dose, 0.01),
+                        colorbar=dict(title="Cumulatieve<br>dosis")),
+            hovertemplate=("T_rect=%{x:.2f}\u00b0C<br>CO_reserve=%{y:.2f} L/min<br>"
+                            "dosis tot dan=%{marker.color:.1f}<extra></extra>"),
+            name="",
+        ))
+        fig_s.update_layout(
+            title="T_rectaal vs CO_reserve \u2014 elk punt is (ensemblelid, tijdstip)",
+            xaxis_title="T_rect (\u00b0C)", yaxis_title="CO_reserve (L/min)",
+            xaxis_range=[x_min, x_max], yaxis_range=[y_min, y_max],
+            height=420, margin=dict(t=40, b=20),
+        )
+        st.plotly_chart(fig_s, use_container_width=True)
+        if max_dose > 0:
+            st.caption(
+                "Rood gearceerd = de conjunctiezone (T_rect\u226540,5\u00b0C \u00e9n CO_reserve\u22640), "
+                "dezelfde zone die de conjunctie-metriek hierboven telt. Kleur = cumulatieve dosis "
+                "**tot dat tijdstip** binnen die zone, per ensemblelid \u2014 niet de einddosis van dat "
+                "lid. De punten van \u00e9\u00e9n lid lopen dus van licht (net binnengekomen) naar donker "
+                "(lang/diep in de zone) naarmate de tijd vordert."
+            )
+        else:
+            st.caption(
+                "Geen enkel ensemblelid kwam in de conjunctiezone terecht (rood gearceerd) \u2014 "
+                "de dosis bleef in alle 200 runs op 0. De vorm van de puntenwolk laat wel zien "
+                "hoe T_rect en CO_reserve zich verhielden tijdens de inspanning."
+            )
+    else:
+        st.caption("Geen bruikbare T_rect/CO_reserve-punten in deze run om te tonen.")
+
     with st.expander("\u26a0\ufe0f Wat dit wel en niet betekent", expanded=True):
         for c in assessment_caveats(result):
             st.markdown(f"- {c}")
 
     if profile_name.strip():
-        if st.button("\U0001F4BE Deze uitkomst opslaan bij dit profiel (lokaal)"):
-            path = store.save_assessment(profile_name.strip(), scenario_shown, result)
-            st.success(f"Opgeslagen: {path.name} \u2014 alleen op deze computer.")
+        if st.button("\U0001F4BE Deze uitkomst opslaan bij dit profiel (lokaal, incl. scatterdata)"):
+            path = store.save_assessment(profile_name.strip(), scenario_shown, result,
+                                          include_traces=True)
+            st.success(f"Opgeslagen: {path.name} \u2014 alleen op deze computer. "
+                       f"Inclusief de ruwe data voor de scatterplot hierboven "
+                       f"(bij deze ensemblegrootte is dat een paar honderd KB, "
+                       f"geen probleem \u2014 anders dan bij een volledige populatierun).")
 
     hist = store.list_history(profile_name.strip()) if profile_name.strip() else []
     if hist:
