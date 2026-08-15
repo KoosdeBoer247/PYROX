@@ -276,45 +276,80 @@ if result is not None:
 
     scatter_data = dose_scatter_points(result.all_traces)
     if len(scatter_data["t_rect"]) > 0:
-        t_vals, c_vals, d_vals = scatter_data["t_rect"], scatter_data["co_reserve"], scatter_data["dose"]
+        t_vals, c_vals, d_vals, phase_vals = (
+            scatter_data["t_rect"], scatter_data["co_reserve"],
+            scatter_data["dose"], scatter_data["phase"])
         x_min, x_max = min(37.0, float(t_vals.min()) - 0.2), max(41.5, float(t_vals.max()) + 0.2)
         y_min, y_max = min(-1.0, float(c_vals.min()) - 0.3), max(3.0, float(c_vals.max()) + 0.3)
         max_dose = float(d_vals.max()) if len(d_vals) else 0.0
+        has_dose = max_dose > 0
 
         fig_s = go.Figure()
         fig_s.add_shape(type="rect", x0=40.5, x1=x_max, y0=y_min, y1=0,
                          fillcolor="rgba(127,0,0,0.12)", line_width=0, layer="below")
         fig_s.add_hline(y=0, line_dash="dot", line_color="#94a3b8")
         fig_s.add_vline(x=40.5, line_dash="dot", line_color="#94a3b8")
-        fig_s.add_trace(go.Scatter(
-            x=t_vals, y=c_vals, mode="markers",
-            marker=dict(size=5, color=d_vals, colorscale="OrRd", showscale=True,
-                        cmin=0, cmax=max(max_dose, 0.01),
-                        colorbar=dict(title="Cumulatieve<br>dosis")),
-            hovertemplate=("T_rect=%{x:.2f}\u00b0C<br>CO_reserve=%{y:.2f} L/min<br>"
-                            "dosis tot dan=%{marker.color:.1f}<extra></extra>"),
-            name="",
-        ))
+
+        # Race and post-finish plotted as separate traces (different
+        # marker symbol) -- these can otherwise look like two unrelated
+        # clusters (CO_reserve rebounding while T_rect lags behind, a
+        # real recovery-phase pattern) with no visual explanation.
+        for phase, symbol, label in [("race", "circle", "Tijdens de inspanning"),
+                                      ("postfinish", "diamond", "Herstel (10 min na finish)")]:
+            mask = phase_vals == phase
+            if not mask.any():
+                continue
+            marker = dict(size=5, symbol=symbol)
+            if has_dose:
+                marker.update(color=d_vals[mask], colorscale="OrRd", cmin=0, cmax=max_dose,
+                               showscale=(phase == "race"),
+                               colorbar=dict(title="Cumulatieve<br>dosis") if phase == "race" else None)
+            else:
+                marker["color"] = "#60a5fa" if phase == "race" else "#a78bfa"
+            fig_s.add_trace(go.Scatter(
+                x=t_vals[mask], y=c_vals[mask], mode="markers", marker=marker,
+                name=label,
+                hovertemplate=(f"{label}<br>T_rect=%{{x:.2f}}\u00b0C<br>"
+                                "CO_reserve=%{y:.2f} L/min<br>"
+                                + ("dosis tot dan=%{marker.color:.1f}<extra></extra>"
+                                   if has_dose else "<extra></extra>")),
+            ))
+
         fig_s.update_layout(
             title="T_rectaal vs CO_reserve \u2014 elk punt is (ensemblelid, tijdstip)",
             xaxis_title="T_rect (\u00b0C)", yaxis_title="CO_reserve (L/min)",
             xaxis_range=[x_min, x_max], yaxis_range=[y_min, y_max],
             height=420, margin=dict(t=40, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
         )
         st.plotly_chart(fig_s, use_container_width=True)
-        if max_dose > 0:
+
+        has_postfinish_only_spread = (
+            (phase_vals == "postfinish").any()
+            and float(c_vals[phase_vals == "postfinish"].max())
+                > float(c_vals[phase_vals == "race"].max() if (phase_vals == "race").any() else -1e9) + 1.0
+        )
+        base_caption = (
+            "Rood gearceerd = de conjunctiezone (T_rect\u226540,5\u00b0C \u00e9n CO_reserve\u22640), "
+            "dezelfde zone die de conjunctie-metriek hierboven telt. De bovenste bandgrafiek "
+            "toont alleen het raceraam; deze scatter bevat ook de 10 minuten herstel na de "
+            "finish (ruit-vormige punten) \u2014 vandaar het bredere CO_reserve-bereik hier."
+        )
+        if has_dose:
             st.caption(
-                "Rood gearceerd = de conjunctiezone (T_rect\u226540,5\u00b0C \u00e9n CO_reserve\u22640), "
-                "dezelfde zone die de conjunctie-metriek hierboven telt. Kleur = cumulatieve dosis "
-                "**tot dat tijdstip** binnen die zone, per ensemblelid \u2014 niet de einddosis van dat "
-                "lid. De punten van \u00e9\u00e9n lid lopen dus van licht (net binnengekomen) naar donker "
-                "(lang/diep in de zone) naarmate de tijd vordert."
+                base_caption + " Kleur = cumulatieve dosis **tot dat tijdstip** binnen de "
+                "conjunctiezone, per ensemblelid \u2014 niet de einddosis van dat lid."
             )
         else:
             st.caption(
-                "Geen enkel ensemblelid kwam in de conjunctiezone terecht (rood gearceerd) \u2014 "
-                "de dosis bleef in alle 200 runs op 0. De vorm van de puntenwolk laat wel zien "
-                "hoe T_rect en CO_reserve zich verhielden tijdens de inspanning."
+                base_caption + " Geen enkel ensemblelid kwam in de conjunctiezone terecht \u2014 "
+                "de dosis bleef in alle runs op 0."
+            )
+        if has_postfinish_only_spread:
+            st.caption(
+                "\u2139\ufe0f De ruit-vormige (herstel-)punten liggen hoger in CO_reserve dan alle "
+                "race-punten: cardiale reserve veert na het stoppen sneller terug dan T_rectaal "
+                "daalt \u2014 een verwacht na-ijl-effect, geen fout in de simulatie."
             )
     else:
         st.caption("Geen bruikbare T_rect/CO_reserve-punten in deze run om te tonen.")

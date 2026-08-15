@@ -407,17 +407,29 @@ def dose_scatter_points(all_traces: list) -> dict:
     toward their own final_dose as their simulated race progresses;
     colour them accordingly rather than reading each point as an
     independent "total".
+
+    Also returns a `phase` array ('race' | 'postfinish') per point.
+    This matters because the race and post-finish windows can look
+    like two visually separate clusters: cardiac output reserve tends
+    to rebound quickly once someone stops (recovering demand), while
+    T_rect lags and stays elevated a little longer -- a real
+    "afterdrop"-style physiological pattern, not a plotting artefact.
+    Without a phase label, that split is easy to misread as a bug the
+    first time someone sees it.
     """
-    t_all, c_all, d_all = [], [], []
+    t_all, c_all, d_all, phase_all = [], [], [], []
     for res in all_traces:
         tr = participant_trace(res)
+        n_race = len(tr["race_t"])
         t_all.extend(tr["t"])
         c_all.extend(tr["c"])
         d_all.extend(tr["dose"])
+        phase_all.extend(["race"] * n_race + ["postfinish"] * (len(tr["t"]) - n_race))
     return {
         "t_rect": np.array(t_all),
         "co_reserve": np.array(c_all),
         "dose": np.array(d_all),
+        "phase": np.array(phase_all),
     }
 
 
