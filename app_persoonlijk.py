@@ -319,8 +319,8 @@ if result is not None:
             title="T_rectaal vs CO_reserve \u2014 elk punt is (ensemblelid, tijdstip)",
             xaxis_title="T_rect (\u00b0C)", yaxis_title="CO_reserve (L/min)",
             xaxis_range=[x_min, x_max], yaxis_range=[y_min, y_max],
-            height=420, margin=dict(t=40, b=20),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            height=460, margin=dict(t=90, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.10, x=0.0),
         )
         st.plotly_chart(fig_s, use_container_width=True)
 
