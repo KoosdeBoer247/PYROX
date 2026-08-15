@@ -464,3 +464,29 @@ spreiding van de twaalf wedstrijdtemperaturen, afgeleid uit het
 gerapporteerde bereik. Die staat geïsoleerd in `_FALM_T_BAR` en
 `_FALM_T_SD` bovenaan `uncertainty.py` en kan vervangen worden zodra
 Tabel 1 uit het artikel gedigitaliseerd is.
+
+---
+
+## Persoonlijke assessment-pagina (toegevoegd 2026-08-15)
+
+`app_persoonlijk.py` + `individual_engine.py` + `local_storage.py` vormen
+samen een derde weergave naast de deelnemers- en beleidsapp: één echte
+persoon, eigen gegevens, één specifiek evenement.
+
+**Privacyarchitectuur.** De enige uitgaande aanroepen zijn geocoding
+(plaatsnaam \u2192 lat/lon/tijdzone) en weerdata (lat/lon/datum \u2192 weer) \u2014
+dezelfde twee die de bestaande apps al gebruiken. Persoonlijke gegevens
+en uitkomsten worden alleen weggeschreven naar lokale JSON-bestanden
+onder `%APPDATA%\PYROX` (Windows) / `~/Library/Application
+Support/PYROX` (macOS) / `~/.local/share/PYROX` (Linux), via
+`local_storage.py`. Dat bestand bevat geen netwerkcode.
+
+**Start de pagina** met:
+
+    streamlit run app_persoonlijk.py
+
+Draai eerst `python3 test_uncertainty.py` en test `individual_engine.
+fetch_scenario_weather()` handmatig tegen een echte locatie voordat je
+vertrouwt op de weeraanroep \u2014 dat pad is in de ontwikkelomgeving niet
+end-to-end getest (geen netwerktoegang tot Open-Meteo vanuit die
+sandbox), alleen de fysiologie/ensemble/opslag eromheen.
