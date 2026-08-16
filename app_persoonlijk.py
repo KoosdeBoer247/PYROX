@@ -31,7 +31,7 @@ import streamlit as st
 
 from individual_engine import (
     PersonalInputs, EventScenario, run_individual_assessment,
-    assessment_caveats, dose_scatter_points,
+    assessment_caveats, dose_scatter_points, representative_trajectories,
 )
 from Thermopoulos_Data_Engine import ROUGHNESS_Z0_TERRAIN
 import local_storage as store
@@ -211,17 +211,21 @@ if run:
         st.error("Vul een locatie in.")
         st.stop()
 
-    progress = st.progress(0, text="Weer en locatie ophalen\u2026")
+    progress = st.progress(0, text="Starten\u2026")
+
+    def _on_progress(frac: float, text: str) -> None:
+        progress.progress(min(int(frac * 100), 100), text=text)
+
     try:
         result = run_individual_assessment(
             inputs, scenario, n_ensemble=int(n_ensemble),
             training_factor=float(training_factor),
+            progress_callback=_on_progress,
         )
     except Exception as e:
         progress.empty()
         st.error(f"Berekening mislukt: {e}")
         st.stop()
-    progress.progress(100, text="Klaar.")
     progress.empty()
     st.session_state["laatste_resultaat"] = result
     st.session_state["laatste_scenario"] = scenario
@@ -279,33 +283,81 @@ if result is not None:
             f"situatie \u2014 geen unieke, voor jou gevalideerde kans."
         )
 
+    x_finish = result.median_stop_minute
+    x_max_chart = max(result.minutes) if result.minutes else x_finish
+
+    meteo = result.meteo
+    fig_m = go.Figure()
+    for key, label, color in [
+        ("t_air", "T_air", "#f59e0b"),
+        ("wbgt", "WBGT", "#dc2626"),
+        ("utci", "UTCI", "#7c3aed"),
+        ("mrt", "MRT", "#0891b2"),
+    ]:
+        fig_m.add_trace(go.Scatter(x=meteo["time"], y=meteo[key], mode="lines",
+                                    line=dict(color=color, width=2), name=label))
+    fig_m.update_layout(
+        title="Weersomstandigheden tijdens de inspanning",
+        yaxis_title="\u00b0C", height=320, margin=dict(t=40, b=20),
+        legend=dict(orientation="h", yanchor="bottom", y=1.10, x=0.0),
+    )
+    st.plotly_chart(fig_m, use_container_width=True)
+    st.caption(
+        "T_air = luchttemperatuur, WBGT = Wet Bulb Globe Temperature, UTCI = Universal "
+        "Thermal Climate Index, MRT = gemiddelde stralingstemperatuur. Alle vier in \u00b0C, "
+        "over het raceraam \u2014 dit venster heeft geen equivalent na de finish."
+    )
+
     fig_t = go.Figure()
-    fig_t.add_trace(go.Scatter(x=result.time_labels, y=result.t_rect_hi, line=dict(width=0),
+    fig_t.add_vrect(x0=x_finish, x1=x_max_chart, fillcolor="rgba(148,163,184,0.10)",
+                     line_width=0, layer="below")
+    fig_t.add_trace(go.Scatter(x=result.minutes, y=result.t_rect_hi, line=dict(width=0),
                                 showlegend=False, hoverinfo="skip"))
-    fig_t.add_trace(go.Scatter(x=result.time_labels, y=result.t_rect_lo, line=dict(width=0),
+    fig_t.add_trace(go.Scatter(x=result.minutes, y=result.t_rect_lo, line=dict(width=0),
                                 fill="tonexty", fillcolor="rgba(220,80,50,0.18)",
-                                name="10\u201390e percentiel", hoverinfo="skip"))
-    fig_t.add_trace(go.Scatter(x=result.time_labels, y=result.t_rect_median,
+                                name="2,5\u201397,5e percentiel", hoverinfo="skip"))
+    fig_t.add_trace(go.Scatter(x=result.minutes, y=result.t_rect_median,
                                 line=dict(color="rgb(190,40,20)", width=2), name="Mediaan"))
     fig_t.add_hline(y=40.5, line_dash="dot", line_color="darkred",
                      annotation_text="40.5\u00b0C (EHS-drempel)")
-    fig_t.update_layout(title="T_rectaal over tijd", yaxis_title="\u00b0C", height=350,
+    fig_t.add_vline(x=x_finish, line_dash="dash", line_color="#64748b",
+                     annotation_text="Finish (mediaan)", annotation_position="top")
+    fig_t.update_layout(title="T_rectaal over tijd \u2014 inspanning + 10 min herstel",
+                         xaxis_title="Minuten sinds start", yaxis_title="\u00b0C", height=350,
                          margin=dict(t=40, b=20))
     st.plotly_chart(fig_t, use_container_width=True)
+    st.caption(
+        "De band (2,5\u201397,5e percentiel) toont de spreiding binnen je eigen ensemble \u2014 "
+        "onzekerheden zoals pacing-respons, windrichting en zweetvariatie. Ze dekt **niet** de "
+        "hellingsonzekerheid van het onderliggende dosis-responsmodel, de grootste, nog niet "
+        "gekwantificeerde foutbron in dit project (zie de kanttekeningen bij de EHS-schatting "
+        "hierboven). Een bredere band betekent dus niet dat het volledige worst-case-scenario "
+        "hier al in zit."
+    )
 
     fig_c = go.Figure()
-    fig_c.add_trace(go.Scatter(x=result.time_labels, y=result.co_reserve_hi, line=dict(width=0),
+    fig_c.add_vrect(x0=x_finish, x1=x_max_chart, fillcolor="rgba(148,163,184,0.10)",
+                     line_width=0, layer="below")
+    fig_c.add_trace(go.Scatter(x=result.minutes, y=result.co_reserve_hi, line=dict(width=0),
                                 showlegend=False, hoverinfo="skip"))
-    fig_c.add_trace(go.Scatter(x=result.time_labels, y=result.co_reserve_lo, line=dict(width=0),
+    fig_c.add_trace(go.Scatter(x=result.minutes, y=result.co_reserve_lo, line=dict(width=0),
                                 fill="tonexty", fillcolor="rgba(30,90,180,0.15)",
-                                name="10\u201390e percentiel", hoverinfo="skip"))
-    fig_c.add_trace(go.Scatter(x=result.time_labels, y=result.co_reserve_median,
+                                name="2,5\u201397,5e percentiel", hoverinfo="skip"))
+    fig_c.add_trace(go.Scatter(x=result.minutes, y=result.co_reserve_median,
                                 line=dict(color="rgb(20,70,160)", width=2), name="Mediaan"))
     fig_c.add_hline(y=0, line_dash="dot", line_color="darkblue",
                      annotation_text="CO_reserve = 0")
-    fig_c.update_layout(title="Cardiale reservecapaciteit (CO_reserve) over tijd",
-                         yaxis_title="L/min", height=350, margin=dict(t=40, b=20))
+    fig_c.add_vline(x=x_finish, line_dash="dash", line_color="#64748b",
+                     annotation_text="Finish (mediaan)", annotation_position="top")
+    fig_c.update_layout(title="Cardiale reservecapaciteit (CO_reserve) over tijd \u2014 inspanning + 10 min herstel",
+                         xaxis_title="Minuten sinds start", yaxis_title="L/min", height=350,
+                         margin=dict(t=40, b=20))
     st.plotly_chart(fig_c, use_container_width=True)
+    st.caption(
+        "Grijs gearceerd = het herstelvenster na de finish. Cardiale reserve herstelt daar "
+        "doorgaans sneller dan T_rectaal daalt, omdat de metabole vraag na het stoppen direct "
+        "wegvalt terwijl de warmte-uitwisseling langzamer verloopt \u2014 een verwacht na-ijl-effect."
+    )
 
     scatter_data = dose_scatter_points(result.all_traces)
     if len(scatter_data["t_rect"]) > 0:
@@ -327,18 +379,28 @@ if result is not None:
         # marker symbol) -- these can otherwise look like two unrelated
         # clusters (CO_reserve rebounding while T_rect lags behind, a
         # real recovery-phase pattern) with no visual explanation.
+        # Custom colorscale: OrRd's low end is near-white, which made
+        # every dose\u22480 point (the vast majority, in a normally mild
+        # scenario) nearly invisible against the white chart background.
+        # This scale starts at a visible pale blue instead of white, so
+        # "no dose yet" still reads as a clear dot, not a gap.
+        _dose_colorscale = [
+            [0.0, "#bfdbfe"], [0.15, "#93c5fd"], [0.4, "#fde68a"],
+            [0.7, "#f97316"], [1.0, "#7f1d1d"],
+        ]
         for phase, symbol, label in [("race", "circle", "Tijdens de inspanning"),
                                       ("postfinish", "diamond", "Herstel (10 min na finish)")]:
             mask = phase_vals == phase
             if not mask.any():
                 continue
-            marker = dict(size=5, symbol=symbol)
+            marker = dict(size=6, symbol=symbol,
+                          line=dict(width=0.6, color="rgba(51,65,85,0.35)"))
             if has_dose:
-                marker.update(color=d_vals[mask], colorscale="OrRd", cmin=0, cmax=max_dose,
+                marker.update(color=d_vals[mask], colorscale=_dose_colorscale, cmin=0, cmax=max_dose,
                                showscale=(phase == "race"),
                                colorbar=dict(title="Cumulatieve<br>dosis") if phase == "race" else None)
             else:
-                marker["color"] = "#60a5fa" if phase == "race" else "#a78bfa"
+                marker["color"] = "#3b82f6" if phase == "race" else "#7c3aed"
             fig_s.add_trace(go.Scatter(
                 x=t_vals[mask], y=c_vals[mask], mode="markers", marker=marker,
                 name=label,
@@ -386,6 +448,82 @@ if result is not None:
             )
     else:
         st.caption("Geen bruikbare T_rect/CO_reserve-punten in deze run om te tonen.")
+
+    # --- Complementary view: a few representative PATHS instead of a
+    # cloud of disconnected points. Reuses the same selection rule the
+    # population apps' Word-report dose-evolution chart already uses.
+    reps = representative_trajectories(result.all_traces)
+    if reps:
+        _label_nl = {
+            "Population median": "Ensemblemediaan",
+            "Lowest risk (dose=0)": "Laagste risico (dosis=0)",
+            "Median non-zero dose": "Mediane niet-nul dosis",
+            "Highest dose": "Hoogste dosis",
+            "Coolest participant": "Koelste run",
+            "Median participant": "Mediane run",
+            "Hottest participant": "Heetste run",
+        }
+        _individual_palette = ["#2a9d8f", "#e9a942", "#c1121f"]
+
+        fig_r = go.Figure()
+        cloud = dose_scatter_points(result.all_traces)
+        if len(cloud["t_rect"]):
+            fig_r.add_trace(go.Scatter(
+                x=cloud["t_rect"], y=cloud["co_reserve"], mode="markers",
+                marker=dict(size=3, color="rgba(148,163,184,0.28)"),
+                name="Volledig ensemble (context)", hoverinfo="skip",
+            ))
+        fig_r.add_shape(type="rect", x0=40.5, x1=42.5, y0=-2, y1=0,
+                         fillcolor="rgba(127,0,0,0.10)", line_width=0, layer="below")
+        fig_r.add_hline(y=0, line_dash="dot", line_color="#94a3b8")
+        fig_r.add_vline(x=40.5, line_dash="dot", line_color="#94a3b8")
+
+        individual_i = 0
+        for tr in reps:
+            label_nl = _label_nl.get(tr["label"], tr["label"])
+            if tr["label"] == "Population median":
+                color = "#1e293b"
+                line_style = dict(color=color, width=2.5, dash="dash")
+            else:
+                color = _individual_palette[individual_i % len(_individual_palette)]
+                individual_i += 1
+                line_style = dict(color=color, width=2)
+            fig_r.add_trace(go.Scatter(
+                x=tr["t"], y=tr["c"], mode="lines", line=line_style, name=label_nl,
+                hovertemplate=(f"{label_nl}<br>T_rect=%{{x:.2f}}\u00b0C<br>"
+                                "CO_reserve=%{y:.2f} L/min<extra></extra>"),
+            ))
+            if tr.get("stopped_at") is not None and tr["min"]:
+                finish_idx = min(range(len(tr["min"])),
+                                  key=lambda i: abs(tr["min"][i] - tr["stopped_at"]))
+                fig_r.add_trace(go.Scatter(
+                    x=[tr["t"][finish_idx]], y=[tr["c"][finish_idx]], mode="markers",
+                    marker=dict(size=11, symbol="star", color=color,
+                                line=dict(width=1, color="white")),
+                    showlegend=False,
+                    hovertemplate=f"{label_nl} \u2014 finish<extra></extra>",
+                ))
+
+        all_t = list(cloud["t_rect"]) + [v for tr in reps for v in tr["t"]]
+        all_c = list(cloud["co_reserve"]) + [v for tr in reps for v in tr["c"]]
+        if all_t and all_c:
+            fig_r.update_layout(
+                xaxis_range=[min(37.0, min(all_t) - 0.2), max(41.5, max(all_t) + 0.2)],
+                yaxis_range=[min(-1.0, min(all_c) - 0.3), max(3.0, max(all_c) + 0.3)],
+            )
+        fig_r.update_layout(
+            title="T_rectaal vs CO_reserve \u2014 representatieve paden door de tijd",
+            xaxis_title="T_rect (\u00b0C)", yaxis_title="CO_reserve (L/min)",
+            height=440, margin=dict(t=90, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.10, x=0.0),
+        )
+        st.plotly_chart(fig_r, use_container_width=True)
+        st.caption(
+            "Elke gekleurde lijn is \u00e9\u00e9n representatief ensemblelid, gevolgd door de tijd "
+            "heen \u2014 dus een pad, geen losse punten. \u2605 = het moment waarop dat lid zelf "
+            "finishte. De lichte puntenwolk op de achtergrond toont het volledige ensemble ter "
+            "context, dezelfde data als de scatter hierboven."
+        )
 
     with st.expander("\u26a0\ufe0f Wat dit wel en niet betekent", expanded=True):
         for c in assessment_caveats(result):

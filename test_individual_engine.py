@@ -113,6 +113,87 @@ def test_timezone_localization() -> bool:
     return ok
 
 
+def test_full_pipeline_with_mocked_weather() -> bool:
+    """End-to-end run_individual_assessment(), with fetch_scenario_weather
+    monkeypatched to a synthetic-but-realistic weather_df (tz-aware index,
+    T_air_urban/MRT/WBGT/UTCI + the other columns build_interp_data needs)
+    instead of hitting the network. This is the closest this suite can get
+    to a real run without network access, and is the only test that
+    exercises the progress callback, meteo_timeseries, and
+    _extended_bands all wired together as the UI actually calls them.
+
+    Regression coverage: the progress-callback budget bug found while
+    building this test (the post-loop "summarising" step reported 0.99
+    right after the last ensemble member had already reported 1.0 --
+    a visible backward tick in the Streamlit progress bar) is pinned by
+    the monotonicity assertion below.
+    """
+    print("Full pipeline, mocked weather (progress + meteo + extended bands + storage)")
+    ok = True
+
+    tz = "Europe/Amsterdam"
+    hours = pd.date_range("2026-05-31 06:00", periods=14, freq="h").tz_localize(tz)
+    n = len(hours)
+    weather_df = pd.DataFrame({
+        "T_air_urban": 18 + 6 * np.sin(np.linspace(0, np.pi, n)),
+        "MRT": 20 + 10 * np.sin(np.linspace(0, np.pi, n)),
+        "WBGT": 16 + 5 * np.sin(np.linspace(0, np.pi, n)),
+        "UTCI": 17 + 6 * np.sin(np.linspace(0, np.pi, n)),
+        "wind_10m": np.full(n, 3.0), "RH": np.full(n, 55.0), "cloud_cover": np.full(n, 20.0),
+        "pressure": np.full(n, 1013.0), "solar_radiation": np.full(n, 500.0),
+        "solar_elevation": np.full(n, 45.0), "T_globe": np.full(n, 25.0),
+    }, index=hours)
+    fake_city = {"name": "Utrecht", "country": "Netherlands",
+                 "latitude": 52.09, "longitude": 5.12, "timezone": tz}
+
+    import individual_engine as ie
+    original_fetch = ie.fetch_scenario_weather
+    ie.fetch_scenario_weather = lambda scenario: (weather_df, fake_city, 52.09, 5.12, tz)
+    try:
+        inputs = PersonalInputs(height_m=1.78, weight_kg=78.0, age=52, gender="male",
+                                 expected_pace_min_per_km=5.5, nsaid_use=False,
+                                 drinks_readily=True, heat_acclimatized=False)
+        scenario = EventScenario(location_query="Utrecht",
+                                  start_local=pd.Timestamp("2026-05-31 10:30"),
+                                  duration_minutes=100.0, use_historical=False)
+        calls = []
+        result = ie.run_individual_assessment(
+            inputs, scenario, n_ensemble=15,
+            progress_callback=lambda frac, text: calls.append((frac, text)),
+            random_seed=3,
+        )
+    finally:
+        ie.fetch_scenario_weather = original_fetch
+
+    fracs = [c[0] for c in calls]
+    ok &= _check("progress reaches 0 at start and 1.0 at end",
+                 fracs[0] <= 0.06 and fracs[-1] == 1.0, f"{fracs[0]}..{fracs[-1]}")
+    ok &= _check("progress never ticks backward (regression: post-loop step "
+                 "used to report less than the last ensemble step)",
+                 all(fracs[i] <= fracs[i + 1] for i in range(len(fracs) - 1)))
+
+    ok &= _check("meteo arrays present and equal length",
+                 len(result.meteo["t_air"]) == len(result.meteo["wbgt"])
+                 == len(result.meteo["utci"]) == len(result.meteo["mrt"]) > 0)
+
+    race_minutes = [m for m, p in zip(result.minutes, result.phase) if p == "race"]
+    pf_minutes = [m for m, p in zip(result.minutes, result.phase) if p == "postfinish"]
+    ok &= _check("both race and post-finish phases present", bool(race_minutes) and bool(pf_minutes))
+    ok &= _check("post-finish minutes start at/after median_stop_minute",
+                 min(pf_minutes) >= result.median_stop_minute)
+    ok &= _check("minutes axis is monotonically non-decreasing",
+                 all(result.minutes[i] <= result.minutes[i + 1]
+                     for i in range(len(result.minutes) - 1)))
+
+    path = store.save_assessment("__test_pipeline__", scenario, result, include_traces=False)
+    s2, a2 = store.load_assessment(path)
+    ok &= _check("full round-trip preserves minutes/phase/meteo",
+                 a2.minutes == result.minutes and a2.phase == result.phase
+                 and np.allclose(a2.meteo["t_air"], result.meteo["t_air"]))
+    path.unlink(missing_ok=True)
+    return ok
+
+
 def test_no_missing_required_args() -> bool:
     """Generic signature-compatibility check: every required keyword of
     process_weather_data() must appear in fetch_scenario_weather()'s
@@ -147,11 +228,18 @@ def test_storage_roundtrip() -> bool:
                               terrain_key="6")
     fake = IndividualAssessment(
         n_ensemble=1,
-        t_rect_median=np.array([37.0]), t_rect_lo=np.array([36.5]), t_rect_hi=np.array([37.5]),
-        co_reserve_median=np.array([3.0]), co_reserve_lo=np.array([2.5]), co_reserve_hi=np.array([3.5]),
-        time_labels=["t0"], conjunction_fraction=0.0,
+        minutes=[0.0, 10.0, 100.0, 110.0], phase=["race", "race", "postfinish", "postfinish"],
+        median_stop_minute=100.0,
+        t_rect_median=np.array([37.0, 38.0, 38.5, 38.2]), t_rect_lo=np.array([36.5, 37.5, 38.0, 37.8]),
+        t_rect_hi=np.array([37.5, 38.5, 39.0, 38.6]),
+        co_reserve_median=np.array([3.0, 2.5, 4.0, 4.5]), co_reserve_lo=np.array([2.5, 2.0, 3.5, 4.0]),
+        co_reserve_hi=np.array([3.5, 3.0, 4.5, 5.0]),
+        conjunction_fraction=0.0,
         ehs_interval={"point_per_1000": 1.0, "lo_per_1000": 0.5, "hi_per_1000": 1.5, "alpha": 0.05},
-        mean_t_air_c=20.0, city_name="Amsterdam", all_traces=[],
+        mean_t_air_c=20.0, city_name="Amsterdam",
+        meteo={"time": [pd.Timestamp("2024-09-22 10:30")], "t_air": np.array([20.0]),
+               "wbgt": np.array([17.0]), "utci": np.array([18.0]), "mrt": np.array([22.0])},
+        all_traces=[],
     )
     path = store.save_assessment("__test_koos__", scenario, fake)
     s2, a2 = store.load_assessment(path)
@@ -207,6 +295,7 @@ def test_personal_ensemble_pipeline() -> bool:
 if __name__ == "__main__":
     results = [
         test_timezone_localization(),
+        test_full_pipeline_with_mocked_weather(),
         test_no_missing_required_args(),
         test_storage_roundtrip(),
         test_personal_ensemble_pipeline(),

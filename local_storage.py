@@ -137,17 +137,26 @@ def delete_profile(name: str) -> None:
 def _assessment_to_jsonable(a: IndividualAssessment, include_traces: bool) -> dict:
     out = {
         "n_ensemble":            a.n_ensemble,
+        "minutes":               list(a.minutes),
+        "phase":                 list(a.phase),
+        "median_stop_minute":    a.median_stop_minute,
         "t_rect_median":         a.t_rect_median.tolist(),
         "t_rect_lo":             a.t_rect_lo.tolist(),
         "t_rect_hi":             a.t_rect_hi.tolist(),
         "co_reserve_median":     a.co_reserve_median.tolist(),
         "co_reserve_lo":         a.co_reserve_lo.tolist(),
         "co_reserve_hi":         a.co_reserve_hi.tolist(),
-        "time_labels":           [str(t) for t in a.time_labels],
         "conjunction_fraction":  a.conjunction_fraction,
         "ehs_interval":          a.ehs_interval,
         "mean_t_air_c":          a.mean_t_air_c,
         "city_name":             a.city_name,
+        "meteo": {
+            "time": [str(t) for t in a.meteo["time"]],
+            "t_air": np.asarray(a.meteo["t_air"]).tolist(),
+            "wbgt": np.asarray(a.meteo["wbgt"]).tolist(),
+            "utci": np.asarray(a.meteo["utci"]).tolist(),
+            "mrt": np.asarray(a.meteo["mrt"]).tolist(),
+        },
     }
     if include_traces:
         out["all_traces"] = a.all_traces
@@ -158,19 +167,29 @@ def assessment_from_jsonable(payload: dict) -> IndividualAssessment:
     """Reconstruct an IndividualAssessment from a saved history entry
     (lists back to numpy arrays). all_traces is only present if it was
     saved with include_traces=True; otherwise it comes back empty."""
+    meteo = payload.get("meteo", {})
     return IndividualAssessment(
         n_ensemble=payload["n_ensemble"],
+        minutes=payload["minutes"],
+        phase=payload["phase"],
+        median_stop_minute=payload["median_stop_minute"],
         t_rect_median=np.array(payload["t_rect_median"]),
         t_rect_lo=np.array(payload["t_rect_lo"]),
         t_rect_hi=np.array(payload["t_rect_hi"]),
         co_reserve_median=np.array(payload["co_reserve_median"]),
         co_reserve_lo=np.array(payload["co_reserve_lo"]),
         co_reserve_hi=np.array(payload["co_reserve_hi"]),
-        time_labels=payload["time_labels"],
         conjunction_fraction=payload["conjunction_fraction"],
         ehs_interval=payload["ehs_interval"],
         mean_t_air_c=payload["mean_t_air_c"],
         city_name=payload["city_name"],
+        meteo={
+            "time": meteo.get("time", []),
+            "t_air": np.array(meteo.get("t_air", [])),
+            "wbgt": np.array(meteo.get("wbgt", [])),
+            "utci": np.array(meteo.get("utci", [])),
+            "mrt": np.array(meteo.get("mrt", [])),
+        },
         all_traces=payload.get("all_traces", []),
     )
 

@@ -73,7 +73,9 @@ the present calibration set. See uncertainty.py's module docstring.
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -100,6 +102,7 @@ from hestia_bridge import (
     cumulative_deficit_dose,
     dose_response_ehs_probability,
     participant_trace,
+    _select_representative_traces,
 )
 import uncertainty as _unc
 
@@ -311,19 +314,130 @@ def fetch_scenario_weather(scenario: EventScenario):
 
 
 
+def meteo_timeseries(weather_df, start_aware: pd.Timestamp, finish_aware: pd.Timestamp,
+                      interval_minutes: int = 10) -> dict:
+    """T_air, WBGT, UTCI and MRT over the race window, for DISPLAY only.
+
+    Deliberately separate from hestia_bridge.build_interp_data(), which
+    feeds the physiology engine: that function only carries T_air_urban/
+    MRT (plus wind/rh/clouds/...) through, because JOS-3 takes those as
+    direct inputs and has no use for WBGT/UTCI, which are downstream
+    composite indices computed FROM the same underlying weather, not
+    additional inputs to it. Rather than modify a shared function used by
+    the population apps just to expose two more columns for one page's
+    chart, this reuses the identical linear-interpolation approach
+    against the same tz-aware weather_df index, so T_air/MRT here match
+    interp_data's temp/mrt values exactly (see
+    test_individual_engine.py's meteo/physiology consistency check).
+
+    start_aware/finish_aware must already be tz-aware (localized via
+    _localize_naive) -- same requirement as build_interp_data, for the
+    same reason: comparing naive against weather_df's tz-aware index
+    does not raise an error, it silently shifts the whole window (see
+    _localize_naive's docstring).
+    """
+    times = pd.date_range(start=start_aware, end=finish_aware, freq=f"{interval_minutes}min")
+    if len(times) < 2:
+        times = pd.date_range(start=start_aware, periods=2, freq=f"{interval_minutes}min")
+    idx_num = weather_df.index.astype("int64").to_numpy()
+    q_num = times.astype("int64").to_numpy()
+
+    def _interp(col):
+        if col not in weather_df.columns:
+            return np.full(len(times), np.nan)
+        return np.interp(q_num, idx_num, weather_df[col].to_numpy())
+
+    return {
+        "time": list(times),
+        "t_air": _interp("T_air_urban"),
+        "wbgt": _interp("WBGT"),
+        "utci": _interp("UTCI"),
+        "mrt": _interp("MRT"),
+    }
+
+
+def _extended_bands(all_traces: list, lo_pct: float = 2.5, hi_pct: float = 97.5) -> dict:
+    """T_rect/CO_reserve median + percentile bands across the ensemble,
+    spanning race AND post-finish, correctly time-aligned.
+
+    lo_pct/hi_pct default to 2.5/97.5 (a 95% band) rather than a tighter
+    10/90 (80% band): for a heat-risk assessment the outliers ARE the
+    point -- a narrower band visually discards exactly the tail draws
+    (unlucky pacing response, unfavourable wind direction, ...) that
+    matter most for deciding whether to worry. [Changed 2026-08-16 on
+    request, after 10/90 was judged too tight for this purpose.]
+
+    Reuses hestia_bridge.participant_trace()'s race/post-finish split
+    and the SAME alignment strategy as hestia_bridge._population_median_
+    trace(): the race phase is aligned by absolute minutes-since-start
+    (valid because every ensemble member starts together), and the
+    post-finish phase is aligned by minutes-since-EACH-member's-OWN-
+    finish, then the whole post-finish segment is offset by the
+    ensemble's MEDIAN stop time. hestia_bridge.py documents exactly why
+    the naive alternative -- aligning everything by absolute minutes
+    since start throughout -- produces a sawtooth artifact once some
+    members are still racing while others have already finished and
+    started recovering. Reusing that already-debugged alignment here
+    rather than re-deriving (and risking re-introducing) the same bug.
+
+    Unlike hestia_bridge._population_median_trace(), which returns only
+    the median, this also returns percentile bands -- matching the rest
+    of this module's "band, not a line" treatment of the genuinely
+    unknowable day-of factors (see this module's own docstring).
+    """
+    race_t_by_min, race_c_by_min = defaultdict(list), defaultdict(list)
+    pf_t_by_min, pf_c_by_min = defaultdict(list), defaultdict(list)
+    stop_times = []
+    for res in all_traces:
+        tr = participant_trace(res)
+        stop_times.append(tr["stopped_at"])
+        for m, t, c in zip(tr["race_min"], tr["race_t"], tr["race_c"]):
+            race_t_by_min[m].append(t)
+            race_c_by_min[m].append(c)
+        for m, t, c in zip(tr["pf_min_since_finish"], tr["pf_t"], tr["pf_c"]):
+            pf_t_by_min[m].append(t)
+            pf_c_by_min[m].append(c)
+
+    median_stop = float(np.median(stop_times)) if stop_times else 0.0
+    race_minutes = sorted(race_t_by_min)
+    pf_minutes = sorted(pf_t_by_min)
+    minutes = list(race_minutes) + [median_stop + m for m in pf_minutes]
+    phase = (["race"] * len(race_minutes)) + (["postfinish"] * len(pf_minutes))
+
+    def _stats(by_min: dict, keys: list) -> tuple:
+        med = [float(np.median(by_min[m])) for m in keys]
+        lo = [float(np.percentile(by_min[m], lo_pct)) for m in keys]
+        hi = [float(np.percentile(by_min[m], hi_pct)) for m in keys]
+        return med, lo, hi
+
+    t_med_r, t_lo_r, t_hi_r = _stats(race_t_by_min, race_minutes)
+    t_med_p, t_lo_p, t_hi_p = _stats(pf_t_by_min, pf_minutes)
+    c_med_r, c_lo_r, c_hi_r = _stats(race_c_by_min, race_minutes)
+    c_med_p, c_lo_p, c_hi_p = _stats(pf_c_by_min, pf_minutes)
+
+    return {
+        "minutes": minutes, "phase": phase, "median_stop_minute": median_stop,
+        "t_rect_median": t_med_r + t_med_p, "t_rect_lo": t_lo_r + t_lo_p, "t_rect_hi": t_hi_r + t_hi_p,
+        "co_reserve_median": c_med_r + c_med_p, "co_reserve_lo": c_lo_r + c_lo_p, "co_reserve_hi": c_hi_r + c_hi_p,
+    }
+
+
 # =============================================================================
 # The assessment itself
 # =============================================================================
 @dataclass
 class IndividualAssessment:
     n_ensemble: int
-    t_rect_median: np.ndarray          # one value per timestep
-    t_rect_lo: np.ndarray              # 10th percentile band
-    t_rect_hi: np.ndarray              # 90th percentile band
+    minutes: list                      # minutes since event start; spans race + post-finish
+    phase: list                        # 'race' | 'postfinish', aligned with `minutes`
+    median_stop_minute: float          # ensemble median finish time (minutes since start) --
+                                        # where the race/post-finish boundary falls on the chart
+    t_rect_median: np.ndarray
+    t_rect_lo: np.ndarray               # 10th percentile band
+    t_rect_hi: np.ndarray               # 90th percentile band
     co_reserve_median: np.ndarray
     co_reserve_lo: np.ndarray
     co_reserve_hi: np.ndarray
-    time_labels: list
     conjunction_fraction: float        # share of ensemble members meeting
                                         # T_rect>=40.5 AND CO_reserve<=0
                                         # at any point (race or post-finish)
@@ -331,6 +445,9 @@ class IndividualAssessment:
                                         # same "sampling + anchor" caveats
     mean_t_air_c: float
     city_name: str
+    meteo: dict                        # from meteo_timeseries(): T_air/WBGT/UTCI/MRT
+                                        # over the RACE window (display only -- post-finish
+                                        # has no associated weather, see meteo_timeseries())
     all_traces: list                   # raw per-member `res` lists, for
                                         # export/plotting by the caller
 
@@ -343,16 +460,36 @@ def run_individual_assessment(
     training_factor: float = 0.5,
     acclimatization_factor: float | None = None,
     random_seed: int = 42,
+    progress_callback: Callable[[float, str], None] | None = None,
+    band_lo_pct: float = 2.5,
+    band_hi_pct: float = 97.5,
 ) -> IndividualAssessment:
     """Run the personal ensemble and return the aggregated assessment.
 
     All computation after fetch_scenario_weather() is local: no further
     network access occurs in this function or anything it calls.
+
+    progress_callback, if given, is called with (fraction_done in
+    [0, 1], status_text) at meaningful points: once for the weather/
+    geocoding fetch, then once per ensemble member. This module has no
+    Streamlit dependency of its own -- the callback is how the UI layer
+    (app_persoonlijk.py) wires a progress bar to a run that can take
+    a minute or more at n_ensemble=200, without this engine module
+    needing to know Streamlit exists.
+
+    band_lo_pct/band_hi_pct control the T_rect/CO_reserve percentile
+    band width (default 2.5/97.5, a 95% band -- see _extended_bands()'s
+    docstring for why that default was chosen over a tighter 10/90).
     """
     inputs.validate()
     if acclimatization_factor is None:
         acclimatization_factor = 1.0 if inputs.heat_acclimatized else 0.0
 
+    def _progress(frac: float, text: str) -> None:
+        if progress_callback is not None:
+            progress_callback(frac, text)
+
+    _progress(0.0, "Locatie en weer ophalen\u2026")
     weather_df, city, lat, lon, tz = fetch_scenario_weather(scenario)
     finish_local = scenario.start_local + pd.Timedelta(minutes=scenario.duration_minutes)
     # CRITICAL: weather_df's index is tz-aware (localized to the event's
@@ -369,6 +506,7 @@ def run_individual_assessment(
     finish_aware = _localize_naive(finish_local, tz)
     interp_data = build_interp_data(weather_df, start_aware, finish_aware)
     mean_t_air = float(np.mean([row["temp"] for row in interp_data]))
+    meteo = meteo_timeseries(weather_df, start_aware, finish_aware)
 
     # MET for the liveability check only (see calculate_indices_jos3_adult's
     # docstring: individual MET is derived from vo2max*pct_vo2max, this
@@ -378,28 +516,24 @@ def run_individual_assessment(
     met_value_ref = (_daniels_gilbert_vo2_at_pace(inputs.expected_pace_min_per_km)
                       / VO2MAX_TO_MET_FACTOR)
 
+    _progress(0.05, f"Simulatie starten (0/{n_ensemble})\u2026")
     rng = np.random.default_rng(random_seed)
     all_traces = []
-    for _ in range(n_ensemble):
+    for i in range(n_ensemble):
         profile = _build_profile(inputs, rng)
         res = calculate_indices_jos3_adult(
             interp_data, lat, lon, met_value_ref, scenario.clo_value,
             profile, training_factor, acclimatization_factor,
         )
         all_traces.append(res)
+        # Weather/geocoding gets the first 5%, the ensemble loop (by far
+        # the slow part -- ~0.4s/member, so ~80s at the default 200) gets
+        # up to 98%, leaving room for the two steps after the loop so the
+        # bar never ticks backward.
+        _progress(0.05 + 0.93 * (i + 1) / n_ensemble,
+                  f"Ensemble-run {i + 1}/{n_ensemble}\u2026")
 
-    n_steps = min(len(r) for r in all_traces)
-
-    def _band(field_name: str):
-        arr = np.array([[r.get(field_name, np.nan) for r in trace[:n_steps]]
-                         for trace in all_traces], dtype=float)
-        return (np.nanmedian(arr, axis=0),
-                np.nanpercentile(arr, 10, axis=0),
-                np.nanpercentile(arr, 90, axis=0))
-
-    t_med, t_lo, t_hi = _band("t_rect")
-    c_med, c_lo, c_hi = _band("co_reserve")
-    time_labels = [r["time"] for r in all_traces[0][:n_steps]]
+    bands = _extended_bands(all_traces, lo_pct=band_lo_pct, hi_pct=band_hi_pct)
 
     # Exact same conjunctive check hestia_bridge.py uses for the
     # population: T_rect>=40.5 AND CO_reserve<=0 at the SAME timestep,
@@ -418,19 +552,26 @@ def run_individual_assessment(
             conj_hits += 1
         doses.append(cumulative_deficit_dose(res))
 
+    _progress(0.99, "Resultaten samenvatten\u2026")
     ehs_ci = _unc.ehs_interval(np.array(doses), mean_t_air, n_boot=2000, random_seed=random_seed)
 
-    return IndividualAssessment(
+    result = IndividualAssessment(
         n_ensemble=n_ensemble,
-        t_rect_median=t_med, t_rect_lo=t_lo, t_rect_hi=t_hi,
-        co_reserve_median=c_med, co_reserve_lo=c_lo, co_reserve_hi=c_hi,
-        time_labels=time_labels,
+        minutes=bands["minutes"], phase=bands["phase"],
+        median_stop_minute=bands["median_stop_minute"],
+        t_rect_median=np.array(bands["t_rect_median"]), t_rect_lo=np.array(bands["t_rect_lo"]),
+        t_rect_hi=np.array(bands["t_rect_hi"]),
+        co_reserve_median=np.array(bands["co_reserve_median"]), co_reserve_lo=np.array(bands["co_reserve_lo"]),
+        co_reserve_hi=np.array(bands["co_reserve_hi"]),
         conjunction_fraction=conj_hits / n_ensemble,
         ehs_interval=ehs_ci,
         mean_t_air_c=mean_t_air,
         city_name=f"{city['name']}, {city.get('country', '')}".strip(", "),
+        meteo=meteo,
         all_traces=all_traces,
     )
+    _progress(1.0, "Klaar.")
+    return result
 
 
 def dose_scatter_points(all_traces: list) -> dict:
@@ -473,6 +614,30 @@ def dose_scatter_points(all_traces: list) -> dict:
         "dose": np.array(d_all),
         "phase": np.array(phase_all),
     }
+
+
+def representative_trajectories(all_traces: list) -> list:
+    """A small number of representative ensemble members' full T_rect/
+    CO_reserve paths over time (race + post-finish) -- a legible
+    complement to plotting every ensemble member as a raw point cloud
+    (see dose_scatter_points()): connected paths show HOW a member's
+    state moved through T_rect/CO_reserve space, which a cloud of
+    disconnected points cannot.
+
+    Reuses hestia_bridge._select_representative_traces() -- the exact
+    selection rule the population apps' own dose-evolution chart
+    already uses (ensemble median, plus lowest/median-nonzero/highest
+    dose members, or coolest/median/hottest-peak members if every dose
+    is zero) -- rather than inventing a second selection rule here.
+
+    Each returned dict has: 'label' (English, from hestia_bridge -- this
+    module stays English throughout; translate at the UI layer, same as
+    everywhere else in this codebase), 'min' (minutes since start),
+    't' (T_rect), 'c' (CO_reserve), 'dose', 'stopped_at' (that specific
+    trace's own finish time in minutes).
+    """
+    doses = np.array([cumulative_deficit_dose(res) for res in all_traces])
+    return _select_representative_traces(all_traces, doses)
 
 
 def assessment_caveats(a: IndividualAssessment) -> list[str]:
