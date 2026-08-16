@@ -3004,6 +3004,31 @@ def calculate_indices_jos3_adult(interp_data, lat, lon, met_value, clo_value,
             results.append({**results[-1],
                             'time': times[i].strftime('%Y-%m-%d %H:%M'),
                             'stopped': True})
+            # [fix, 2026-08-16] jos3_cvr_series must stay in lockstep with
+            # `results`, or the post-loop link_cvr_to_jos3() call below
+            # produces a CO_reserve series shorter than the race itself --
+            # co_reserve silently goes to NaN for every step after the
+            # freeze, even though t_rect correctly freezes (copied via
+            # {**results[-1], ...} above). Confirmed directly: with this
+            # append missing, a participant reaching RPE>=19.5 partway
+            # through the race has valid co_reserve up to that point, then
+            # NaN for the rest -- which makes cumulative_deficit_dose()
+            # silently exclude them from the conjunctive criterion for the
+            # remainder of the race REGARDLESS of their true T_rect/
+            # CO_reserve state, even if t_rect was frozen above 40.5C.
+            # There is already a documented partial fix for the ANALOGOUS
+            # symptom at the post-finish boundary (co_reserve_finish
+            # fallback, below) -- this is the same root cause, one level
+            # up: keep the CVR input series itself from truncating early,
+            # rather than patching each place that reads a
+            # possibly-truncated result afterward.
+            # jos3_snapshot_this_step is still in scope from the last
+            # non-frozen iteration (Python for-loop variables persist
+            # across iterations); re-appending it is exactly the same
+            # "freeze the last known state" semantics results.append()
+            # already uses above, just applied to the CVR input series too.
+            if CVR_AVAILABLE and jos3_cvr_series:
+                jos3_cvr_series.append(jos3_snapshot_this_step)
             continue
 
         # Liveability check uses the EVENT MET (met_value), not individual

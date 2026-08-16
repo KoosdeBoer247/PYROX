@@ -490,3 +490,39 @@ fetch_scenario_weather()` handmatig tegen een echte locatie voordat je
 vertrouwt op de weeraanroep \u2014 dat pad is in de ontwikkelomgeving niet
 end-to-end getest (geen netwerktoegang tot Open-Meteo vanuit die
 sandbox), alleen de fysiologie/ensemble/opslag eromheen.
+
+---
+
+## Kernfout gevonden en gerepareerd: CO_reserve werd NaN na uitputting (2026-08-16)
+
+**Oorzaak.** In `calculate_indices_jos3_adult()` (hestia_model.py) wordt
+een deelnemer op `stopped=True` gezet zodra RPE≥19,5. Vanaf dat moment
+wordt T_rectaal keurig doorgekopieerd (`{**results[-1], ...}`), maar
+`jos3_cvr_series.append(...)` — nodig voor de latere CO_reserve-berekening
+— zat in de tak die de bevroren iteraties juist overslaan. Het gevolg:
+`link_cvr_to_jos3()` kreeg een kortere reeks dan de race zelf, en elke
+tijdstap na uitputting kreeg CO_reserve = NaN, terwijl T_rectaal gewoon
+een geldige (bevroren) waarde had.
+
+**Impact.** `cumulative_deficit_dose()` en de conjunctie-check vereisen
+een geldige (niet-NaN) CO_reserve. Elke deelnemer die uitgeput raakte
+tijdens bevroren T_rectaal ≥ 40,5°C werd dus **onzichtbaar voor het
+conjunctieve criterium** — ongeacht wat hun werkelijke CO_reserve was.
+Dit kan de EHS/conjunctie-schatting alleen laten **onderschatten**, nooit
+overschatten: de fix kan alleen eerder onzichtbare conjunctiegevallen
+toevoegen, nooit een geldig geval wegnemen. Dit raakt de kern-engine die
+door **alle** apps wordt gebruikt (populatie én persoonlijk), dus dit
+heeft mogelijk ook eerdere hindcasts (Leiden, Utrecht, DtD) beïnvloed,
+in een richting die het al bestaande overpredictie-probleem tegenover
+Falmouth niet verklaart — eerder license marginaal vergroot.
+
+**Fix.** Bij het bevriezen wordt nu ook het laatste JOS-3-snapshot
+opnieuw toegevoegd aan `jos3_cvr_series`, zodat die reeks in de pas
+blijft lopen met `results`. Minimale wijziging: alleen code toegevoegd
+binnen de tak die uitsluitend bereikt wordt na `runner_stopped=True` —
+niet-bevroren deelnemers zijn per constructie onaangeraakt (empirisch
+bevestigd: identieke tussenwaarden vóór en na de fix).
+
+**Tests:** `test_cvr_freeze_fix.py` (nieuw, 3/3), plus de volledige
+bestaande suite (`test_individual_engine.py`, `test_uncertainty.py`,
+`test_revised_calibration.py`) blijft groen.
