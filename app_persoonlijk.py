@@ -32,7 +32,9 @@ import streamlit as st
 from individual_engine import (
     PersonalInputs, EventScenario, run_individual_assessment,
     assessment_caveats, dose_scatter_points, representative_trajectories,
+    zone_episode,
 )
+from individual_report import generate_individual_report_docx
 from Thermopoulos_Data_Engine import ROUGHNESS_Z0_TERRAIN
 import local_storage as store
 
@@ -525,6 +527,44 @@ if result is not None:
             "context, dezelfde data als de scatter hierboven."
         )
 
+        # Automatic, per-line explanation of WHEN a member entered/left
+        # the danger zone -- a static chart doesn't make this timing
+        # visible by itself, and "recovered" means something different
+        # depending on whether it happened during exertion or only
+        # after stopping (see zone_episode()'s docstring).
+        zone_lines = []
+        individual_i = 0
+        for tr in reps:
+            label_nl = _label_nl.get(tr["label"], tr["label"])
+            ep = zone_episode(tr)
+            if ep is None:
+                continue
+            if ep["entered_only_postfinish"]:
+                zone_lines.append(
+                    f"**{label_nl}**: kwam de conjunctiezone pas **na de finish** binnen \u2014 "
+                    f"nooit tijdens de race zelf. T_rectaal liep na het stoppen nog door tot de "
+                    f"drempel geraakt werd (het na-ijl-effect); stoppen bleek hier niet meteen "
+                    f"voldoende bescherming."
+                )
+            elif ep["exited_during_race"]:
+                zone_lines.append(
+                    f"**{label_nl}**: kwam de conjunctiezone in \u00e9n er weer uit, **terwijl nog "
+                    f"gelopen werd**. Het lichaam trok zichzelf hier terug onder belasting \u2014 "
+                    f"het meest geruststellende van de drie patronen."
+                )
+            elif ep["in_zone_at_finish"]:
+                zone_lines.append(
+                    f"**{label_nl}**: zat nog in de conjunctiezone **op het moment van finishen**. "
+                    f"Als de lijn daarna herstelt, komt dat vrijwel zeker doordat de inspanning "
+                    f"stopte (de hartslagvraag valt dan snel weg), niet doordat de warmtedreiging "
+                    f"al was opgelost."
+                )
+        if zone_lines:
+            st.markdown("**Wanneer kwam elk pad de conjunctiezone in of uit?**")
+            for line in zone_lines:
+                st.markdown(f"- {line}")
+
+
     with st.expander("\u26a0\ufe0f Wat dit wel en niet betekent", expanded=True):
         for c in assessment_caveats(result):
             st.markdown(f"- {c}")
@@ -537,6 +577,19 @@ if result is not None:
                        f"Inclusief de ruwe data voor de scatterplot hierboven "
                        f"(bij deze ensemblegrootte is dat een paar honderd KB, "
                        f"geen probleem \u2014 anders dan bij een volledige populatierun).")
+
+    st.download_button(
+        "\U0001F4C4 Download persoonlijk rapport (Word)",
+        data=generate_individual_report_docx(inputs, scenario_shown, result),
+        file_name=(f"pyrox_persoonlijk_{result.city_name.split(',')[0]}_"
+                   f"{scenario_shown.start_local.date()}.docx"),
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        help="Een Word-rapport met je profiel, het evenement, de weersomstandigheden, "
+             "de EHS-schatting met kanttekeningen, en de T_rect/CO_reserve-grafieken \u2014 "
+             "gegenereerd volledig lokaal, uit de al-berekende uitkomst hierboven "
+             "(geen nieuwe simulatie, geen netwerkverkeer). In het Engels, net als de "
+             "andere PYROX-rapporten in deze suite.",
+    )
 
     hist = store.list_history(profile_name.strip()) if profile_name.strip() else []
     if hist:

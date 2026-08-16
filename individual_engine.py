@@ -640,6 +640,47 @@ def representative_trajectories(all_traces: list) -> list:
     return _select_representative_traces(all_traces, doses)
 
 
+def zone_episode(tr: dict) -> dict | None:
+    """For one representative trajectory (from representative_trajectories()),
+    determine whether and how it entered the conjunctive danger zone
+    (T_rect>=40.5 AND CO_reserve<=0) -- and, crucially, whether any exit
+    from that zone happened WHILE STILL EXERTING or only AFTER the
+    finish. A static chart does not make this distinction visible by
+    itself; this function computes it directly from the trace.
+
+    These two exits are not equivalent. Exiting post-finish is largely
+    a consequence of simulate_post_finish() feeding the CVR model
+    resting metabolic rate (PF_MET_RUST) instead of race-pace MET:
+    cardiac output demand collapses once running stops, which can pull
+    CO_reserve back above zero even while T_rect is still elevated (see
+    the note on this in this module's docstring history). That is a
+    mechanical consequence of stopping, not evidence the thermal danger
+    resolved. Exiting the zone DURING the race means the danger
+    genuinely eased while the person was still under load -- a
+    meaningfully more reassuring pattern, and worth telling apart in
+    plain language for a non-expert reader.
+
+    Returns None if the trace never entered the zone at all. Otherwise:
+        'entered_during_race'    -- zone reached at some point while m <= stopped_at
+        'in_zone_at_finish'      -- still in the zone at that member's own finish moment
+        'entered_only_postfinish'-- zone reached ONLY after finishing, never during the race
+        'exited_during_race'     -- left the zone before finishing, while still exerting
+    """
+    in_zone = [(t >= 40.5 and c <= 0) for t, c in zip(tr["t"], tr["c"])]
+    if not any(in_zone):
+        return None
+    stopped_at = tr["stopped_at"]
+    during_race = [z for z, m in zip(in_zone, tr["min"]) if m <= stopped_at]
+    after_finish = [z for z, m in zip(in_zone, tr["min"]) if m > stopped_at]
+    finish_idx = min(range(len(tr["min"])), key=lambda i: abs(tr["min"][i] - stopped_at))
+    return {
+        "entered_during_race": any(during_race),
+        "in_zone_at_finish": in_zone[finish_idx],
+        "entered_only_postfinish": (not any(during_race)) and any(after_finish),
+        "exited_during_race": any(during_race) and not in_zone[finish_idx],
+    }
+
+
 def assessment_caveats(a: IndividualAssessment) -> list[str]:
     """Caveats to show alongside the assessment. Mirrors
     uncertainty.interval_caveats() but reworded for a personal-ensemble

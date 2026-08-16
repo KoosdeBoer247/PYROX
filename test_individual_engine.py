@@ -41,7 +41,7 @@ os.environ.setdefault("PYROX_DATA_DIR", tempfile.mkdtemp())
 
 from individual_engine import (
     PersonalInputs, EventScenario, IndividualAssessment,
-    fetch_scenario_weather, _build_profile,
+    fetch_scenario_weather, _build_profile, zone_episode,
 )
 from Thermopoulos_Data_Engine import process_weather_data
 from hestia_model import calculate_indices_jos3_adult, VO2MAX_TO_MET_FACTOR, _daniels_gilbert_vo2_at_pace
@@ -110,6 +110,50 @@ def test_timezone_localization() -> bool:
     w_interp = build_interp_data(winter_df, w_start, w_finish, interval_minutes=30)
     ok &= _check("winter (CET) 09:00 local resolves to ~3\u00b0C, not a 1h-shifted reading",
                  2.9 <= w_interp[0]["temp"] <= 3.1, f"got {w_interp[0]['temp']}")
+    return ok
+
+
+def test_zone_episode_classification() -> bool:
+    """zone_episode()'s three real patterns, plus the near-miss case
+    found while building the Word report (2026-08-16): T_rect and
+    CO_reserve can EACH cross their own threshold at some point in a
+    trace without ever doing so AT THE SAME timestep -- two separate
+    line panels both crossing their threshold looks, at a glance, like
+    the conjunctive zone was reached, but it wasn't. This is exactly
+    the distinction the conjunctive criterion exists to enforce (see
+    Veltmeijer's finding that T_rect alone is too loose a criterion),
+    so a regression here would silently reintroduce that looseness."""
+    print("zone_episode() classification, including the near-miss case")
+    ok = True
+
+    self_recovered = {"t": [38, 40.6, 40.6, 39.5, 39.0], "c": [3, -0.5, -0.3, 1.0, 2.0],
+                       "min": [0, 20, 30, 40, 50], "stopped_at": 50}
+    r = zone_episode(self_recovered)
+    ok &= _check("self-recovered during race",
+                 r is not None and r["exited_during_race"] and not r["in_zone_at_finish"])
+
+    still_in_at_finish = {"t": [38, 40.6, 40.7, 40.8, 41.0, 41.0], "c": [3, -0.2, -0.5, -0.9, 4.0, 4.5],
+                          "min": [0, 20, 40, 50, 60, 70], "stopped_at": 50}
+    r = zone_episode(still_in_at_finish)
+    ok &= _check("still in zone at finish", r is not None and r["in_zone_at_finish"])
+
+    postfinish_only = {"t": [38, 39, 39.5, 41.2, 41.5], "c": [3, 2.5, 2.0, -0.3, -0.8],
+                       "min": [0, 25, 50, 60, 70], "stopped_at": 50}
+    r = zone_episode(postfinish_only)
+    ok &= _check("entered only post-finish",
+                 r is not None and r["entered_only_postfinish"] and not r["entered_during_race"])
+
+    never_enters = {"t": [38, 39, 39.5], "c": [3, 2.5, 2.0], "min": [0, 25, 50], "stopped_at": 50}
+    ok &= _check("never enters zone -> None", zone_episode(never_enters) is None)
+
+    # THE NEAR-MISS CASE: T_rect peaks at 40.8 (index 1), CO_reserve
+    # dips to -0.6 (index 3) -- both individually cross their threshold,
+    # but never on the same index. Must classify as "never entered".
+    near_miss = {"t": [38.0, 40.8, 39.0, 38.5], "c": [3.0, 1.0, 0.5, -0.6],
+                "min": [0, 20, 40, 60], "stopped_at": 60}
+    r = zone_episode(near_miss)
+    ok &= _check("independent (non-simultaneous) extremes do NOT count as entering the zone",
+                 r is None, f"got {r}")
     return ok
 
 
@@ -295,6 +339,7 @@ def test_personal_ensemble_pipeline() -> bool:
 if __name__ == "__main__":
     results = [
         test_timezone_localization(),
+        test_zone_episode_classification(),
         test_full_pipeline_with_mocked_weather(),
         test_no_missing_required_args(),
         test_storage_roundtrip(),

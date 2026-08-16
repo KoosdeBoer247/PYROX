@@ -596,7 +596,7 @@ def _flag_colour(flag_name: str) -> str:
 # Section builders
 # =============================================================================
 def _add_title_section(doc, city_name, exp_start, generated_at, app_build,
-                       report_title="PYROX \u2014 Findings Report"):
+                       report_title="PYROX \u2014 Findings Report", scope_text=None):
     title = doc.add_heading(report_title, level=0)
     title.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
@@ -610,7 +610,7 @@ def _add_title_section(doc, city_name, exp_start, generated_at, app_build,
     ).font.size = Pt(9)
 
     scope = doc.add_paragraph()
-    scope_run = scope.add_run(
+    scope_run = scope.add_run(scope_text if scope_text is not None else (
         "SCOPE: This report presents model outputs and findings only. It "
         "does not include recommendations for operational measures "
         "(staffing, start times, water stations, or any other action) \u2014 "
@@ -618,7 +618,7 @@ def _add_title_section(doc, city_name, exp_start, generated_at, app_build,
         "have context this report does not. Where two figures in this "
         "report disagree, an explanation of WHY is included where "
         "relevant; that is a methodological note, not a recommendation."
-    )
+    ))
     scope_run.italic = True
     scope_run.font.size = Pt(9.5)
     scope.paragraph_format.space_before = Pt(6)
