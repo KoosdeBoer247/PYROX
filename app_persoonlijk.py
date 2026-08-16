@@ -241,10 +241,43 @@ if result is not None:
                    "tijdens de inspanning of in de 10 minuten erna.")
     ehs = result.ehs_interval
     if "error" not in ehs:
-        m2.metric("Geschatte EHS-kans", f"\u2248{ehs['point_per_1000']:.1f} per 1000",
-                   delta=f"{ehs['lo_per_1000']:.2f}\u2013{ehs['hi_per_1000']:.2f} sampling+anker",
-                   delta_color="off")
+        # Shown as a percentage, not "per 1000": this run describes one
+        # person, and "per 1000" invites the reasonable-but-wrong
+        # question "1000 of what?" when there is no population here.
+        # The label deliberately does NOT say "kans op EHS" outright --
+        # this number is Falmouth Road Race population epidemiology
+        # (DeMartini et al.) applied to this person's simulated dose,
+        # not a probability independently validated for this individual.
+        # Overstating it as "the chance" would quietly undo the same
+        # epistemic caution uncertainty.py's caveats exist to keep.
+        pct = ehs["point_per_1000"] / 10.0
+        pct_lo = ehs["lo_per_1000"] / 10.0
+        pct_hi = ehs["hi_per_1000"] / 10.0
+        m2.metric(
+            "Geschatte EHS-kans (o.b.v. vergelijkbare gevallen)",
+            f"\u2248{pct:.2f}%",
+            delta=f"{pct_lo:.2f}\u2013{pct_hi:.2f}% sampling+anker",
+            delta_color="off",
+            help="Gebaseerd op epidemiologie van vergelijkbare hardlopers (Falmouth Road Race-"
+                 "data), toegepast op jouw gesimuleerde dosis \u2014 geen kans die specifiek voor "
+                 "jou is gevalideerd.",
+        )
     m3.metric("T_rect piek (mediaan)", f"{np.nanmax(result.t_rect_median):.2f}\u00b0C")
+
+    if "error" not in ehs:
+        def _freq_phrase(lo1000: float, hi1000: float) -> str:
+            lo_r, hi_r = round(lo1000), round(hi1000)
+            if hi_r < 1:
+                return "minder dan 1 op de 1000"
+            if lo_r == hi_r:
+                return f"ongeveer {lo_r} op de 1000"
+            return f"ongeveer {lo_r} tot {hi_r} op de 1000"
+
+        st.caption(
+            f"Ter vergelijking: {_freq_phrase(ehs['lo_per_1000'], ehs['hi_per_1000'])} in "
+            f"soortgelijke omstandigheden. Dit is een populatiegemiddelde toegepast op jouw "
+            f"situatie \u2014 geen unieke, voor jou gevalideerde kans."
+        )
 
     fig_t = go.Figure()
     fig_t.add_trace(go.Scatter(x=result.time_labels, y=result.t_rect_hi, line=dict(width=0),
