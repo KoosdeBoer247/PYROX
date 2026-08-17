@@ -441,6 +441,24 @@ class IndividualAssessment:
     conjunction_fraction: float        # share of ensemble members meeting
                                         # T_rect>=40.5 AND CO_reserve<=0
                                         # at any point (race or post-finish)
+    ehe_fraction: float                # share meeting the EHE
+                                        # criterion (T_rect>39.5 AND
+                                        # CO_reserve<0, same timestep, during
+                                        # exertion).
+                                        # Deliberately a FRACTION, never a
+                                        # per-1000 rate: no calibration
+                                        # anchor exists for this criterion.
+    ehe_dose_mean: float               # MEAN EHE dose across the whole ensemble
+                                        # (0 for non-qualifying members). Not a
+                                        # median: with a minority of members
+                                        # qualifying, the median is 0 by
+                                        # construction and hides the signal.
+    ehe_dose_among_hits: float         # median EHE dose among QUALIFYING members
+                                        # only -- "how bad is it when it happens"
+    eac_fraction: float                # share meeting EAC (CO_reserve<0
+                                        # post-finish, no temperature condition)
+    eac_dose_mean: float               # MEAN EAC dose across the whole ensemble
+    eac_dose_among_hits: float         # median EAC dose among qualifying members
     ehs_interval: dict                 # from uncertainty.ehs_interval(),
                                         # same "sampling + anchor" caveats
     mean_t_air_c: float
@@ -517,6 +535,20 @@ def run_individual_assessment(
                       / VO2MAX_TO_MET_FACTOR)
 
     _progress(0.05, f"Simulatie starten (0/{n_ensemble})\u2026")
+    # [fix, 2026-08-16] Seed the GLOBAL numpy RNG as well, not just this
+    # module's own default_rng. calculate_indices_jos3_adult() draws the
+    # per-drink volume from the global np.random (np.random.uniform(120,
+    # 180) in its main loop) -- the only unseeded randomness inside the
+    # engine. Without this line, `random_seed` controlled only the
+    # ensemble PROFILES while the drinking term still varied freely, so
+    # two runs with identical inputs and identical seed produced
+    # different doses and different EHS estimates. Verified directly:
+    # before this line, running the same 60-participant batch twice
+    # changed the dose for 49 of 60 participants.
+    # generate_base_population() (hestia_model.py) already does exactly
+    # this for the population apps -- this brings the personal path in
+    # line with it rather than inventing a different convention.
+    np.random.seed(random_seed)
     rng = np.random.default_rng(random_seed)
     all_traces = []
     for i in range(n_ensemble):
@@ -539,7 +571,11 @@ def run_individual_assessment(
     # population: T_rect>=40.5 AND CO_reserve<=0 at the SAME timestep,
     # during the race or in the post-finish window.
     conj_hits = 0
+    ehe_hits = 0
+    eac_hits = 0
     doses = []
+    ehe_doses = []
+    eac_doses = []
     for res in all_traces:
         during_race = any(
             (r.get("t_rect") is not None and r.get("co_reserve") is not None
@@ -550,7 +586,14 @@ def run_individual_assessment(
         post_finish = bool(res[-1].get("ehs_postfinish", False))
         if during_race or post_finish:
             conj_hits += 1
+        if conjunctive_hit(res, EHE_T_THRESHOLD, EHE_CO_THRESHOLD,
+                           strict=True, window="race"):
+            ehe_hits += 1
+        if eac_hit(res):
+            eac_hits += 1
         doses.append(cumulative_deficit_dose(res))
+        ehe_doses.append(ehe_dose(res))
+        eac_doses.append(eac_dose(res))
 
     _progress(0.99, "Resultaten samenvatten\u2026")
     ehs_ci = _unc.ehs_interval(np.array(doses), mean_t_air, n_boot=2000, random_seed=random_seed)
@@ -564,6 +607,14 @@ def run_individual_assessment(
         co_reserve_median=np.array(bands["co_reserve_median"]), co_reserve_lo=np.array(bands["co_reserve_lo"]),
         co_reserve_hi=np.array(bands["co_reserve_hi"]),
         conjunction_fraction=conj_hits / n_ensemble,
+        ehe_fraction=ehe_hits / n_ensemble,
+        ehe_dose_mean=float(np.mean(ehe_doses)) if ehe_doses else 0.0,
+        ehe_dose_among_hits=(float(np.median([d for d in ehe_doses if d > 0]))
+                              if any(d > 0 for d in ehe_doses) else 0.0),
+        eac_fraction=eac_hits / n_ensemble,
+        eac_dose_mean=float(np.mean(eac_doses)) if eac_doses else 0.0,
+        eac_dose_among_hits=(float(np.median([d for d in eac_doses if d > 0]))
+                              if any(d > 0 for d in eac_doses) else 0.0),
         ehs_interval=ehs_ci,
         mean_t_air_c=mean_t_air,
         city_name=f"{city['name']}, {city.get('country', '')}".strip(", "),
@@ -572,6 +623,163 @@ def run_individual_assessment(
     )
     _progress(1.0, "Klaar.")
     return result
+
+
+# =============================================================================
+# Conjunctive criteria
+# =============================================================================
+#: The author's own conjunctive EHS criterion: T_rect >= 40.5 C AND
+#: CO_reserve <= 0 AT THE SAME TIMESTEP. 40.5 C after Roberts (2010).
+EHS_T_THRESHOLD  = 40.5
+EHS_CO_THRESHOLD = 0.0
+
+#: --- EHE: Exertional Heat Exhaustion -------------------------------------
+#: T_rect > 39.5 C AND CO_reserve < 0 at the SAME timestep, DURING exertion.
+#:
+#: Formerly labelled "collapse" in this module; renamed 2026-08-17 after
+#: checking the definitions against the literature. The clinical entity
+#: this matches is exertional heat exhaustion (ACSM Expert Consensus
+#: Statement on Exertional Heat Illness, 2023): core temperature
+#: typically 38.5-40 C, inability to continue, WITHOUT the CNS
+#: dysfunction that defines EHS. 39.5 C sits inside that band.
+#: "Collapse" was the wrong word: in the sports-medicine literature
+#: that term denotes EAC (see below), a different entity with the
+#: opposite pathophysiology.
+#:
+#: WHAT THIS CRITERION ACTUALLY MEANS -- checked empirically against
+#: this model's own output (2026-08-17), not assumed:
+#: Following ensemble members from the moment they first meet it, T_rect
+#: does NOT then climb to the 40.5 C EHS threshold. It plateaus: of 40
+#: warned members at 31 C, exactly one later reached 40.5 C, and that
+#: one was already above it when warned. The state is stable in
+#: temperature, not a slope toward heat stroke.
+#: But CO_reserve keeps falling at that plateau (e.g. -0.10 -> -0.46
+#: over five 10-min steps at a constant 40.14 C). MET stays essentially
+#: flat over the same span (11.04 -> 11.00, i.e. 0.4%), so pacing is NOT
+#: what stabilises the temperature -- a genuine thermal steady state is,
+#: while dehydration erodes CO_max underneath it.
+#: So the criterion marks LOST CONTROL MARGIN, not impending
+#: hyperthermia: temperature is being held only because heat production
+#: and loss happen to balance, while the capacity to answer any further
+#: disturbance (a climb, a sheltered windless stretch, a finishing
+#: sprint) is disappearing. In control terms: the regulated variable
+#: looks fine while the actuator reserve runs out.
+#: This is why EHE_dose (the integral of the deficit over time) is the
+#: more informative output than the yes/no flag -- erosion is the
+#: phenomenon, not threshold-crossing.
+#:
+#: NOT the same construct as hestia_model.py's existing `p_collapse`
+#: two-phase logistic. That model reads t_rect_max_per_sim (maximum over
+#: the whole trace) and res_min (minimum over the whole trace)
+#: INDEPENDENTLY, so a T_rect peak at 11:00 and a CO_reserve trough at
+#: 13:00 both contribute even though they never co-occurred. This
+#: criterion is strictly simultaneous.
+#:
+#: NOT calibrated against observed EHE incidence -- no anchor dataset
+#: exists for it, so this module reports it as a FRACTION OF THE
+#: ENSEMBLE and never converts it to a rate per 1000.
+EHE_T_THRESHOLD  = 39.5
+EHE_CO_THRESHOLD = 0.0
+
+#: --- EAC: Exercise-Associated Collapse ------------------------------------
+#: CO_reserve < 0 in the POST-FINISH window only. No temperature
+#: requirement -- deliberately.
+#:
+#: EAC (Asplund & O'Connor 2011; Roberts 2007; StatPearls) is collapse in
+#: a CONSCIOUS athlete who cannot stand or walk unaided, occurring after
+#: an endurance event. Its mechanism is postural hypotension: the muscle
+#: pump stops at the finish line, cutaneous vasodilation persists, venous
+#: return falls, and cerebral perfusion follows. It is cardiovascular,
+#: not thermal -- which is why imposing a temperature threshold here
+#: would be wrong, not merely conservative. Asplund's own guidance is
+#: that collapse DURING a race points to some other, more serious cause.
+#:
+#: This is the one criterion in this module with a real external anchor:
+#: the Gothenburg Half Marathon reports 1.53 EAC cases per 1000 runners,
+#: and EAC accounts for 59-85% of finish-line medical-tent visits. That
+#: makes it the first candidate since Falmouth for calibrating an
+#: absolute rate rather than a relative signal. Not attempted here --
+#: reported as an ensemble fraction like the others, pending a proper
+#: dose-response fit against that anchor.
+EAC_CO_THRESHOLD = 0.0
+
+
+def conjunctive_hit(res: list, t_threshold: float, co_threshold: float,
+                     strict: bool = False, window: str = "both") -> bool:
+    """True if T_rect and CO_reserve BOTH cross their thresholds at the
+    SAME timestep, within the requested window.
+
+    window: 'race' (during exertion only), 'postfinish' (the recovery
+    window only), or 'both'. This matters because the three criteria in
+    this module are deliberately scoped differently:
+        EHS  -> both      (can occur during or just after)
+        EHE  -> race      (exhaustion is a during-exertion entity)
+        EAC  -> postfinish (Asplund: collapse DURING a race points to a
+                            different, more serious cause)
+    Scoping them identically would quietly merge three distinct clinical
+    entities into one number.
+
+    `strict` selects > / < rather than >= / <=. EHS uses non-strict
+    (>=40.5, <=0) to match how it is stated in the literature; EHE uses
+    strict (>39.5, <0). Kept as an explicit argument so the asymmetry is
+    visible at every call site rather than hidden per-criterion.
+    """
+    def _hit(t, c) -> bool:
+        if t is None or c is None or np.isnan(t) or np.isnan(c):
+            return False
+        return ((t > t_threshold) if strict else (t >= t_threshold)) and \
+               ((c < co_threshold) if strict else (c <= co_threshold))
+
+    if window in ("race", "both"):
+        for r in res:
+            if _hit(r.get("t_rect"), r.get("co_reserve")):
+                return True
+    if window in ("postfinish", "both"):
+        pf_t = res[-1].get("t_rect_series_postfinish") or []
+        pf_c = res[-1].get("co_reserve_series_postfinish") or []
+        if any(_hit(t, c) for t, c in zip(pf_t, pf_c)):
+            return True
+    return False
+
+
+def eac_hit(res: list) -> bool:
+    """EAC: CO_reserve < 0 anywhere in the post-finish window, with NO
+    temperature condition. See EAC_CO_THRESHOLD's note for why imposing
+    one would be wrong rather than merely conservative."""
+    pf_c = res[-1].get("co_reserve_series_postfinish") or []
+    return any(c is not None and not np.isnan(c) and c < EAC_CO_THRESHOLD
+               for c in pf_c)
+
+
+def ehe_dose(res: list) -> float:
+    """Cumulative CO_reserve deficit-minutes while the EHE conjunction
+    holds DURING exertion -- same construction as
+    hestia_bridge.cumulative_deficit_dose(), at the milder temperature
+    threshold and restricted to the race window.
+
+    This, rather than the yes/no flag, is the output that matches what
+    the criterion actually describes: the empirical check documented at
+    EHE_T_THRESHOLD found the warned state to be stable in temperature
+    while the reserve deficit keeps deepening, so the integral of that
+    deficit carries the signal and a threshold crossing does not."""
+    dose = 0.0
+    for r in res:
+        t, c = r.get("t_rect"), r.get("co_reserve")
+        if t is not None and c is not None and not np.isnan(t) and not np.isnan(c):
+            if t > EHE_T_THRESHOLD and c < EHE_CO_THRESHOLD:
+                dose += abs(c) * 10.0          # 10-min race timesteps
+    return dose
+
+
+def eac_dose(res: list) -> float:
+    """Cumulative CO_reserve deficit-minutes in the post-finish window
+    (no temperature condition), i.e. the EAC analogue of ehe_dose()."""
+    dose = 0.0
+    pf_c = res[-1].get("co_reserve_series_postfinish") or []
+    for c in pf_c:
+        if c is not None and not np.isnan(c) and c < EAC_CO_THRESHOLD:
+            dose += abs(c) * 0.5               # ~30s post-finish timesteps
+    return dose
 
 
 def dose_scatter_points(all_traces: list) -> dict:
@@ -694,4 +902,16 @@ def assessment_caveats(a: IndividualAssessment) -> list[str]:
         f"every run in this ensemble is you, on slightly different "
         f"assumptions about factors nobody can know in advance."
     )
+    if a.ehe_fraction > 0 or a.eac_fraction > 0:
+        notes.append(
+            f"EHE ({a.ehe_fraction:.0%}) and EAC ({a.eac_fraction:.0%}) are shares "
+            f"of YOUR OWN ensemble runs \u2014 not rates per 1000, and not calibrated "
+            f"against observed incidence for either criterion. Read them as "
+            f"relative severity signals for comparing scenarios. For EHE the "
+            f"dose (mean {a.ehe_dose_mean:.2f}, median among those affected "
+            f"{a.ehe_dose_among_hits:.2f}) is the more informative "
+            f"figure: the criterion marks lost control margin that keeps "
+            f"deepening at a stable temperature, not an imminent threshold "
+            f"crossing."
+        )
     return notes

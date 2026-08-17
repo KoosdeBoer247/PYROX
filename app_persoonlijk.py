@@ -270,6 +270,29 @@ if result is not None:
         )
     m3.metric("T_rect piek (mediaan)", f"{np.nanmax(result.t_rect_median):.2f}\u00b0C")
 
+    e1, e2 = st.columns(2)
+    e1.metric(
+        "EHE \u2014 uitputting door hitte (T_rect>39,5\u00b0C \u00e9n CO_reserve<0)",
+        f"{result.ehe_fraction:.0%} van je ensemble-runs",
+        delta=f"dosis: gem. {result.ehe_dose_mean:.2f} | {result.ehe_dose_among_hits:.2f} bij getroffenen",
+        delta_color="off",
+        help="Exertional Heat Exhaustion: uitputting door hitte tijdens de inspanning. "
+             "Markeert het moment waarop je temperatuur alleen nog stabiel blijft omdat "
+             "warmteproductie en -verlies toevallig in balans zijn, terwijl je "
+             "cardiovasculaire reserve verder wegzakt. De dosis zegt meer dan het "
+             "percentage \u2014 het gaat om hoe lang en hoe diep, niet om het passeren "
+             "van een grens.",
+    )
+    e2.metric(
+        "EAC \u2014 collaps na de finish (CO_reserve<0, geen temperatuureis)",
+        f"{result.eac_fraction:.0%} van je ensemble-runs",
+        delta=f"dosis: gem. {result.eac_dose_mean:.2f} | {result.eac_dose_among_hits:.2f} bij getroffenen",
+        delta_color="off",
+        help="Exercise-Associated Collapse: het niet zelfstandig kunnen staan of lopen "
+             "n\u00e1 de finish, door bloeddrukval wanneer de spierpomp wegvalt. "
+             "Cardiovasculair, niet thermisch \u2014 daarom bewust z\u00f3nder "
+             "temperatuurdrempel.",
+    )
     if "error" not in ehs:
         def _freq_phrase(lo1000: float, hi1000: float) -> str:
             lo_r, hi_r = round(lo1000), round(hi1000)

@@ -493,36 +493,164 @@ sandbox), alleen de fysiologie/ensemble/opslag eromheen.
 
 ---
 
-## Kernfout gevonden en gerepareerd: CO_reserve werd NaN na uitputting (2026-08-16)
+## Twee kernfouten gevonden en gerepareerd (2026-08-16)
 
-**Oorzaak.** In `calculate_indices_jos3_adult()` (hestia_model.py) wordt
-een deelnemer op `stopped=True` gezet zodra RPE≥19,5. Vanaf dat moment
-wordt T_rectaal keurig doorgekopieerd (`{**results[-1], ...}`), maar
-`jos3_cvr_series.append(...)` — nodig voor de latere CO_reserve-berekening
-— zat in de tak die de bevroren iteraties juist overslaan. Het gevolg:
-`link_cvr_to_jos3()` kreeg een kortere reeks dan de race zelf, en elke
-tijdstap na uitputting kreeg CO_reserve = NaN, terwijl T_rectaal gewoon
-een geldige (bevroren) waarde had.
+### 1. CO_reserve werd NaN na uitputting (hestia_model.py)
 
-**Impact.** `cumulative_deficit_dose()` en de conjunctie-check vereisen
-een geldige (niet-NaN) CO_reserve. Elke deelnemer die uitgeput raakte
-tijdens bevroren T_rectaal ≥ 40,5°C werd dus **onzichtbaar voor het
-conjunctieve criterium** — ongeacht wat hun werkelijke CO_reserve was.
-Dit kan de EHS/conjunctie-schatting alleen laten **onderschatten**, nooit
-overschatten: de fix kan alleen eerder onzichtbare conjunctiegevallen
-toevoegen, nooit een geldig geval wegnemen. Dit raakt de kern-engine die
-door **alle** apps wordt gebruikt (populatie én persoonlijk), dus dit
-heeft mogelijk ook eerdere hindcasts (Leiden, Utrecht, DtD) beïnvloed,
-in een richting die het al bestaande overpredictie-probleem tegenover
-Falmouth niet verklaart — eerder license marginaal vergroot.
+**Oorzaak.** In `calculate_indices_jos3_adult()` wordt een deelnemer op
+`stopped=True` gezet zodra RPE>=19,5. Vanaf dat moment wordt T_rectaal
+doorgekopieerd (`{**results[-1], ...}`), maar
+`jos3_cvr_series.append(...)` — nodig voor de latere CO_reserve — zat in
+de tak die de bevroren iteraties juist overslaan (`continue`). De
+post-loop `link_cvr_to_jos3()` kreeg dus een kortere reeks dan de race,
+en elke tijdstap na uitputting hield CO_reserve = NaN, terwijl T_rectaal
+een geldige bevroren waarde had.
 
-**Fix.** Bij het bevriezen wordt nu ook het laatste JOS-3-snapshot
-opnieuw toegevoegd aan `jos3_cvr_series`, zodat die reeks in de pas
-blijft lopen met `results`. Minimale wijziging: alleen code toegevoegd
-binnen de tak die uitsluitend bereikt wordt na `runner_stopped=True` —
-niet-bevroren deelnemers zijn per constructie onaangeraakt (empirisch
-bevestigd: identieke tussenwaarden vóór en na de fix).
+**Impact, empirisch gemeten via A/B (pre-fix vs post-fix codebase, met
+globale seeding zodat de vergelijking geldig is):**
+- Mild scenario (Utrecht 31-05, 200 runs): conjunctie 0% -> 0%, dosis
+  0 -> 0. **Geen verschil.** De twee deelnemers die bevroren boven
+  40,5 °C hadden een herstelde CO_reserve van +1,00 en +1,04 — positief,
+  dus geen conjunctie. De fout was daar dus latent, niet actief.
+- Extreem scenario (35 °C, 400 min, 80 runs): 47 bevroren, waarvan 42
+  ín het gevarenkwadrant. Gemiddelde dosis **45,50 -> 137,11 (3x)**.
+  42 deelnemers kregen een hogere dosis, **0 een lagere**.
 
-**Tests:** `test_cvr_freeze_fix.py` (nieuw, 3/3), plus de volledige
-bestaande suite (`test_individual_engine.py`, `test_uncertainty.py`,
-`test_revised_calibration.py`) blijft groen.
+De impact schaalt dus met de ernst van het scenario. Bij milde
+omstandigheden verandert er niets; bij ernstige omstandigheden — precies
+waar het ertoe doet — werd de belasting fors onderschat. De fout kan
+alleen tot **onderschatting** leiden, nooit tot overschatting.
+
+**Correctheid geverifieerd via A/B op identieke invoer:**
+- Nooit-bevroren deelnemers: bit-identiek voor/na (49/49).
+- Bevroren deelnemers: bit-identiek tot en met de bevriezingsstap.
+- Na bevriezing: pre = NaN, post = de bevroren waarde, constant.
+- `CVRModel.compute_step()` is aantoonbaar puur (stateless), dus een
+  herhaald snapshot geeft een echte bevriezing, geen wegdrijving.
+
+### 2. Persoonlijke app was niet reproduceerbaar (individual_engine.py)
+
+`calculate_indices_jos3_adult()` trekt het drinkvolume per slok uit de
+**globale** `np.random` (`np.random.uniform(120, 180)`). Dat is de enige
+ongezaaide willekeur in de motor. `run_individual_assessment()` zaaide
+alleen zijn eigen `default_rng` voor de profielen, waardoor twee runs met
+dezelfde invoer én dezelfde seed verschillende uitkomsten gaven —
+gemeten: de dosis veranderde bij **49 van 60 deelnemers**. Een gebruiker
+die zijn rapport twee keer downloadt kreeg dus twee verschillende
+antwoorden zonder te weten welk klopt.
+
+`generate_base_population()` zaaide de globale RNG al wel voor de
+populatie-apps; de persoonlijke route doet dat nu ook.
+
+**Tests:** `test_cvr_freeze_fix.py` (3/3) en
+`test_individual_engine.py::test_reproducibility_same_seed`, plus de
+volledige bestaande suite blijft groen (7/7, 6/6, 3/3, en
+`test_revised_calibration.py`).
+
+---
+
+## Drie endpoints in plaats van één (2026-08-17)
+
+Na toetsing tegen de literatuur zijn de criteria opgesplitst en hernoemd.
+Het oude "collaps"-label was onjuist: in de sportgeneeskunde betekent
+collaps (EAC) iets anders dan wat er gemodelleerd werd.
+
+| | criterium | venster | anker |
+|---|---|---|---|
+| **EHS** | T_rect ≥ 40,5 °C én CO_reserve ≤ 0 | race + post-finish | Breslow 2021 (Boston) |
+| **EHE** | T_rect > 39,5 °C én CO_reserve < 0 | alleen tijdens inspanning | geen |
+| **EAC** | CO_reserve < 0 (géén temperatuureis) | alleen post-finish | 1,53/1000 (Göteborg) — nog niet gefit |
+
+**EHS** — klinisch: CNS-disfunctie plus kerntemperatuur >40,5 °C.
+Het model kan geen neurologische status simuleren en vervangt het
+CNS-criterium door cardiovasculaire decompensatie. Die substitutie is
+conservatief: cerebrale hypoperfusie is gemeten bij 40 °C kerntemperatuur
+met intacte cardiac output (Nybo & Nielsen 2001), dus CNS-disfunctie kan
+optreden vóórdat CO_reserve nul bereikt. Systematische onderdetectie
+wordt opgevangen door de intercept-kalibratie.
+
+**EHE** — exertional heat exhaustion. Empirisch getoetst tegen de eigen
+modeluitvoer: de toestand gaat *niet* over in 40,5 °C. Van 40 gewaarschuwde
+lopers bij 31 °C bereikte er één alsnog die drempel, en die zat er al
+boven. T_rect bereikt een echt thermisch evenwicht terwijl CO_reserve
+blijft dalen door dehydratie — bij vrijwel onveranderde MET (11,04 → 11,00
+over vijf stappen), dus pacing is níet de stabilisator. Het criterium
+markeert daarom **verloren regelmarge**, geen aanstaande hittebevanging.
+De dosis draagt dat signaal; de ja/nee-vlag niet.
+
+**EAC** — exercise-associated collapse. Posturale hypotensie na de finish
+wanneer de spierpomp wegvalt. Cardiovasculair, niet thermisch: de
+temperatuurdrempel ontbreekt bewust. Dit is het enige criterium met een
+extern anker en daarmee de eerste kandidaat sinds Falmouth voor een
+absolute-incidentiekalibratie.
+
+Tests: `test_individual_engine.py::test_ehe_eac_criteria` en
+`::test_eac_window_scoping` (9/9 groen).
+
+---
+
+## CO_reserve tekenomkering bij extreme hittebelasting (2026-08-17)
+
+**Gevonden bij onderzoek naar waarom de conjunctieve criteria zelden vuren.**
+
+CO_reserve = (CO_max_heat − CO_rest_heat) × (1 − f). Hittebelasting duwt
+CO_max omlaag (−8,3%/CHSI) en CO_rest omhoog (+31,3%/CHSI), dus voorbij
+een bepaalde CHSI kruisen die twee en wordt de eerste factor negatief. In
+datzelfde bereik is f afgekapt boven 1,0 (op 1,15), dus (1 − f) is óók
+negatief — en twee negatieven vermenigvuldigd geven een **positieve**
+reserve. Precies in de toestand waarin de loper zelfs de rustbehoefte niet
+meer kan leveren, rapporteerde het model dus een gezonde reserve, waardoor
+elk criterium dat CO_reserve < 0 vereist stilzwijgend stopte met vuren.
+
+Gemeten vóór de fix (66 jaar, 94 kg, MET 7,5):
+
+| CHSI | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|
+| CO_reserve | +0,08 | **−0,08** | **+0,16** | **+0,49** |
+
+Na de fix: −0,08 → −1,04 → −3,27 → −7,73, monotoon dalend.
+
+**Fix:** `co_demand` wordt afgekapt op `co_rest_heat` — de metabole vraag
+kan niet onder de rustbehoefte zakken. Dit verandert niets zolang
+CO_max_heat > CO_rest_heat, dus over het hele fysiologisch normale bereik;
+de coëfficiënten van Lloyd et al. (2022) blijven onaangeroerd. Het
+verwijdert alleen een artefact van het lineair doorextrapoleren voorbij
+het punt waar de twee lijnen elkaar kruisen.
+
+**Wat NIET het probleem bleek.** Twee hypothesen zijn onderzocht en
+verworpen: (a) onbeperkt drinken — de gesimuleerde netto dehydratie is
+3,16% (spreiding 1,75–4,25%) bij een marathon van 3,5 uur op 30 °C,
+precies binnen de 2–4% uit de literatuur; (b) de dehydratie-fix van
+9 augustus 2026 — die corrigeerde een echte fout (CVR kreeg een
+nooit-verminderde accumulator gevoed, alsof de loper nooit dronk) en de
+uitkomst is aantoonbaar realistisch.
+
+Test: `test_cvr_freeze_fix.py::test_co_reserve_monotone_in_heat_strain`.
+
+---
+
+## Beleidsapp: drie criteria per 1000 (2026-08-17)
+
+`app_beleid.py` en het beleids-Word-rapport tonen nu alle drie de
+endpoints als aantal per 1000, met definities.
+
+**Waarom per 1000 hier wél mag en in de persoonlijke app niet.** In de
+beleidsapp is het ensemble een *gesimuleerde populatie* (uit
+`generate_base_population`), dus fractie x 1000 is een echte incidentie
+per 1000 deelnemers. In `app_persoonlijk.py` is het ensemble één persoon
+herhaald onder verschillende dag-aannames; daar zou dezelfde omrekening
+betekenisloos zijn en blijft het een percentage van je eigen runs.
+
+**Twee soorten "per 1000" op dezelfde pagina.** De EHS-schatting bovenaan
+komt uit een dosis-responsmodel dat tegen waargenomen Falmouth-incidentie
+is gekalibreerd. De drie criteriumtellingen eronder zijn ongekalibreerd:
+hoeveel gesimuleerde lopers per 1000 het criterium haalden, zonder fit
+tegen enige waarneming. Onderling en tussen scenario's vergelijkbaar,
+maar niet te lezen als verwachte aantallen. Dit staat expliciet in zowel
+het scherm (uitklapbaar blok) als het rapport.
+
+Implementatie: `hestia_bridge.py` berekent `pct_true_ehe_criterion` en
+`pct_true_eac_criterion` naast de bestaande `pct_true_ehs_criterion`,
+via dezelfde `conjunctive_hit()`/`eac_hit()` uit `individual_engine.py`
+(lazy import wegens circulaire afhankelijkheid) — één implementatie
+gedeeld door de populatie- en persoonlijke route, geen tweede kopie.

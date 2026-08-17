@@ -185,11 +185,53 @@ def test_unaffected_participants_are_unchanged() -> bool:
     return ok
 
 
+def test_co_reserve_monotone_in_heat_strain() -> bool:
+    """Regression test for the CO_reserve sign inversion found
+    2026-08-17.
+
+    co_reserve = (co_max_heat - co_rest_heat) x (1 - f). Heat strain
+    pushes co_max_heat DOWN (-8.3%/CHSI) and co_rest_heat UP
+    (+31.3%/CHSI), so past some CHSI the two cross and the first factor
+    turns negative. f is clipped above 1.0 (at 1.15) in that same
+    regime, making (1 - f) negative too -- and the product of two
+    negatives is POSITIVE. The result was a healthy-looking reserve in
+    precisely the states where the runner cannot meet even resting
+    cardiac demand, so every criterion requiring co_reserve < 0
+    silently stopped firing in the worst scenarios.
+
+    Measured before the fix (66 y/o, 94 kg, MET 7.5):
+        CHSI 6 -> -0.08 (minimum), CHSI 7 -> +0.16, CHSI 8 -> +0.49.
+
+    Fixed by flooring co_demand at co_rest_heat: demand cannot fall
+    below resting demand. Untouched wherever co_max_heat > co_rest_heat,
+    i.e. across the whole physiologically normal range, so Lloyd et al.
+    (2022)'s coefficients are unaffected."""
+    print("CO_reserve monotonicity in heat strain")
+    from HESTIA_CVR_Module_v2 import CVRModel, RunnerProfile, JOS3Outputs
+    r = RunnerProfile(mass=94, height=174, age=66, sex="male", vo2max=36.5)
+    m = CVRModel(r)
+    vals = []
+    for chsi in range(0, 11):
+        snap = JOS3Outputs(t_min=60, cardiac_output=900.0,
+                            t_core_mean=36.54 + chsi * 1.6, t_cb=36.54,
+                            weight_loss_g_s=0.0, bf_skin_total=350.0,
+                            bf_ava_hand=0.5, bf_ava_foot=0.5,
+                            current_met=7.5, t_skin_mean=36.54)
+        vals.append(m.compute_step(snap).CO_reserve)
+    ok = _check("co_reserve never increases as heat strain increases",
+                all(vals[i + 1] <= vals[i] + 1e-9 for i in range(len(vals) - 1)),
+                f"{[round(v, 2) for v in vals]}")
+    ok &= _check("co_reserve reaches clearly negative values at extreme strain",
+                 vals[-1] < -1.0, f"final {vals[-1]:.2f}")
+    return ok
+
+
 if __name__ == "__main__":
     results = [
         test_no_nan_co_reserve_after_freeze(),
         test_frozen_co_reserve_matches_freeze_moment(),
         test_unaffected_participants_are_unchanged(),
+        test_co_reserve_monotone_in_heat_strain(),
     ]
     print()
     print(f"{sum(results)}/{len(results)} test groups passed")

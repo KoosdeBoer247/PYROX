@@ -507,6 +507,81 @@ if st.session_state.results and selected_levels:
                             f"cover \u2014 {lvl}"):
                         for _c in _caveats:
                             st.markdown("- " + _c)
+
+            # [2026-08-17] Criterion counts for the three heat-illness
+            # endpoints, per 1000. Meaningful here (unlike in the
+            # single-person app) because this ensemble IS a sampled
+            # population, so a fraction converts to an incidence.
+            _ehs_c = result.get("pct_true_ehs_criterion")
+            _ehe_c = result.get("pct_true_ehe_criterion")
+            _eac_c = result.get("pct_true_eac_criterion")
+            if _ehs_c is not None:
+                st.markdown(f"**Criterion counts \u2014 {lvl}** (simulated, uncalibrated)")
+                k1, k2, k3 = st.columns(3)
+                k1.metric("EHS \u2014 exertional heat stroke",
+                          f"{_ehs_c*10:.1f} per 1000",
+                          help="T_rect\u226540.5\u00b0C AND CO_reserve\u22640 at the same "
+                               "timestep, during the race or shortly after.")
+                k2.metric("EHE \u2014 exertional heat exhaustion",
+                          f"{(_ehe_c or 0)*10:.1f} per 1000",
+                          help="T_rect>39.5\u00b0C AND CO_reserve<0 at the same "
+                               "timestep, during exertion only.")
+                k3.metric("EAC \u2014 exercise-associated collapse",
+                          f"{(_eac_c or 0)*10:.1f} per 1000",
+                          help="CO_reserve<0 in the 10 minutes after finishing. "
+                               "No temperature condition \u2014 EAC is "
+                               "cardiovascular, not thermal.")
+                with st.expander(f"\u2139\ufe0f What these three mean, and how they "
+                                 f"differ from the estimate above \u2014 {lvl}"):
+                    st.markdown(
+                        "**These are model criterion counts, not calibrated "
+                        "incidence estimates.** The EHS figure at the top of this "
+                        "page comes from a dose-response model fitted against "
+                        "observed Falmouth Road Race incidence. The three numbers "
+                        "here are simply how many simulated runners per 1000 met "
+                        "each criterion \u2014 no fit against any observed dataset. "
+                        "They are directly comparable to *each other* and between "
+                        "scenarios, but should not be read as expected case counts."
+                    )
+                    st.markdown(
+                        "- **EHS \u2014 Exertional Heat Stroke.** Clinically: CNS "
+                        "dysfunction plus core temperature above 40.5\u00b0C (Roberts "
+                        "2010; ACSM 2023). This model cannot simulate neurological "
+                        "status, so it substitutes cardiovascular decompensation "
+                        "(CO_reserve\u22640) for the CNS criterion \u2014 a "
+                        "conservative substitution: cerebral hypoperfusion has been "
+                        "measured at 40\u00b0C core temperature with cardiac output "
+                        "still intact (Nybo & Nielsen 2001)."
+                    )
+                    st.markdown(
+                        "- **EHE \u2014 Exertional Heat Exhaustion.** Clinically: "
+                        "inability to continue, core temperature typically "
+                        "38.5\u201340\u00b0C, WITHOUT the CNS dysfunction that "
+                        "defines EHS (ACSM 2023). Marks lost control margin: "
+                        "temperature holds only because heat production and loss "
+                        "happen to balance, while cardiovascular reserve keeps "
+                        "eroding underneath it."
+                    )
+                    st.markdown(
+                        "- **EAC \u2014 Exercise-Associated Collapse.** Clinically: "
+                        "a conscious athlete unable to stand or walk unaided after "
+                        "finishing, from postural hypotension when the muscle pump "
+                        "stops while skin vessels stay dilated (Asplund & O'Connor "
+                        "2011). Cardiovascular, not thermal \u2014 hence no "
+                        "temperature threshold. Operationally the most relevant of "
+                        "the three for finish-line planning: EAC accounts for "
+                        "59\u201385% of medical-tent visits, with a reference "
+                        "incidence of 1.53 per 1000 (Gothenburg Half Marathon) "
+                        "against which this figure can be sanity-checked."
+                    )
+                    st.markdown(
+                        "- **CO_reserve.** The share of maximum cardiac output not "
+                        "already claimed by exercise and thermoregulation combined "
+                        "(Lloyd et al. 2022). Zero means no further increase in "
+                        "cooling capacity is available. All three criteria require "
+                        "both conditions at the SAME timestep \u2014 a temperature "
+                        "peak at 11:00 and a reserve trough at 13:00 do not count."
+                    )
             if broad_screen is not None:
                 c3.metric(
                     "Worth monitoring (broad screen)", f"{broad_screen:.1f}%",

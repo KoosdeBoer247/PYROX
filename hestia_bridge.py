@@ -498,6 +498,8 @@ def _summarize_results(all_results: list) -> dict:
     # point -- mid-race or shortly after -- is counted, and one who merely
     # has a high T_rect with intact cardiovascular reserve is not.
     true_ehs = []
+    true_ehe = []
+    true_eac = []
     t_rect_co_reserve_pairs = []
     doses = []
     for res in all_results:
@@ -510,6 +512,18 @@ def _summarize_results(all_results: list) -> dict:
         post_finish = bool(res[-1].get("ehs_postfinish", False))
         true_ehs.append(during_race or post_finish)
         doses.append(cumulative_deficit_dose(res))
+
+        # [2026-08-17] EHE and EAC, using the same simultaneity rule but
+        # different thresholds and windows. Definitions and the reasoning
+        # for the window split live in individual_engine.py (imported
+        # lazily to avoid a circular import: that module imports from
+        # this one). Kept as one implementation shared by the population
+        # and personal paths rather than a second copy here.
+        from individual_engine import (conjunctive_hit, eac_hit,
+                                        EHE_T_THRESHOLD, EHE_CO_THRESHOLD)
+        true_ehe.append(conjunctive_hit(res, EHE_T_THRESHOLD, EHE_CO_THRESHOLD,
+                                         strict=True, window="race"))
+        true_eac.append(eac_hit(res))
 
         # Same source data as the check above, kept for the scatter plot:
         # every point where both t_rect and co_reserve are known simultaneously.
@@ -559,6 +573,16 @@ def _summarize_results(all_results: list) -> dict:
         "peak_t_rect_p95": float(np.nanpercentile(peak_t_rect, 95)),
         "peak_t_rect_max": float(np.nanmax(peak_t_rect)),
         "pct_true_ehs_criterion": float(100 * np.mean(true_ehs)),
+        # [2026-08-17] EHE/EAC criterion counts. These are SIMULATED
+        # criterion incidences across a sampled population -- unlike
+        # pct_dose_response_ehs they are NOT fitted against any observed
+        # incidence, so they are the model's own count, not an
+        # epidemiological estimate. Presented per 1000 in the policy
+        # views (the ensemble there IS a population sample, so the
+        # conversion is meaningful, which it would not be in the
+        # single-person app).
+        "pct_true_ehe_criterion": float(100 * np.mean(true_ehe)),
+        "pct_true_eac_criterion": float(100 * np.mean(true_eac)),
         "pct_first_aid": float(100 * np.mean(first_aid)),
         "pct_ehs_postfinish": float(100 * np.mean(
             [bool(res[-1].get("ehs_postfinish", False)) for res in all_results])),

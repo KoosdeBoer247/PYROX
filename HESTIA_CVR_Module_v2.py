@@ -362,7 +362,38 @@ class CVRModel:
         # --- Final HR, CO, SV (Eq. 29-31) ---
         hr = (self.HR_max - hr_rest_heat) * f_vo2max_reserve + hr_rest_heat
         hr = np.clip(hr, hr_rest_heat * 0.95, self.HR_max * 1.05)
-        co_demand = (co_max_heat - co_rest_heat) * f_vo2max_reserve + co_rest_heat
+        # [fix, 2026-08-17] Floor demand at the heat-adjusted RESTING
+        # demand. Without this floor, co_reserve is non-monotonic in heat
+        # strain and flips sign in the worst cases -- the opposite of
+        # what it must report.
+        #
+        # Mechanism: co_reserve = (co_max_heat - co_rest_heat) x (1 - f).
+        # Once CHSI is high enough that co_rest_heat EXCEEDS co_max_heat,
+        # that first factor turns negative; f is simultaneously clipped
+        # above 1.0 (at 1.15), so (1 - f) is negative too. The product of
+        # two negatives is POSITIVE, i.e. a healthy-looking reserve in a
+        # state where the runner cannot even meet resting cardiac demand.
+        # Measured before this fix, for a 66 y/o 94 kg runner at MET 7.5:
+        #   CHSI  5 -> co_reserve +0.08
+        #   CHSI  6 -> co_reserve -0.08   (minimum)
+        #   CHSI  7 -> co_reserve +0.16   (sign flipped back)
+        #   CHSI  8 -> co_reserve +0.49
+        # so the conjunctive criteria (which require co_reserve < 0)
+        # silently STOPPED firing exactly in the most extreme scenarios.
+        #
+        # The floor encodes a fact the unclamped algebra loses: metabolic
+        # demand cannot fall below resting demand. When the heat-adjusted
+        # ceiling drops below that floor, the reserve is simply the
+        # (negative) gap between them, which stays monotonic in heat
+        # strain. This changes nothing while co_max_heat > co_rest_heat,
+        # i.e. across the entire physiologically normal range, so Lloyd
+        # et al. (2022)'s calibrated coefficients are untouched -- it only
+        # removes an artefact of extrapolating the linear form past the
+        # point where the two lines cross.
+        co_demand = max(
+            co_rest_heat,
+            (co_max_heat - co_rest_heat) * f_vo2max_reserve + co_rest_heat,
+        )
         sv = (co_demand / max(0.01, hr)) * 1000.0
 
         # --- Reserve and load, measured against the heat-adjusted ceiling ---
@@ -391,11 +422,30 @@ class CVRModel:
             HR               = round(hr, 1),
             HR_max           = round(self.HR_max, 1),
             HR_reserve_pct   = round(hr_reserve_pct, 1),
-            CO_demand        = round(co_demand, 2),
-            CO_max           = round(co_max_heat, 2),
-            CO_reserve       = round(co_reserve, 2),
+            # [fix, 2026-08-17] CO_demand / CO_max / CO_reserve / CVS_index
+            # are kept at full working precision (6 dp) rather than the 2 dp
+            # used for the display-only fields below. CO_reserve in
+            # particular is a DECISION variable: every conjunctive criterion
+            # in this project tests it against zero (EHS: <=0, EHE: <0,
+            # EAC: <0), so rounding to 0.01 L/min quantised the answer
+            # exactly at the threshold being tested. Two concrete failures
+            # that produced:
+            #   true -0.004 -> round -> -0.0, and in Python -0.0 < 0 is
+            #       False, so EHE/EAC silently MISSED a genuine deficit;
+            #   true +0.004 -> round ->  0.0, and 0.0 <= 0 is True, so EHS
+            #       COUNTED a runner whose reserve was actually positive.
+            # Observed symptom before this fix: qualifying timesteps
+            # clustering on exact multiples of 0.01 (-0.01, -0.02, -0.03)
+            # while post-finish values, which bypass this constructor,
+            # carried full precision (e.g. -0.6107502261377182).
+            # `decompensating` above was already computed from the
+            # unrounded value, so it was never affected -- which is why
+            # this stayed hidden.
+            CO_demand        = round(co_demand, 6),
+            CO_max           = round(co_max_heat, 6),
+            CO_reserve       = round(co_reserve, 6),
             SV               = round(sv, 1),
-            CVS_index        = round(cvs_index, 3),
+            CVS_index        = round(cvs_index, 6),
             decompensating   = decompensating,
             ava_open         = ava_open,
             dehydration_pct  = round(dehydration_pct, 2),

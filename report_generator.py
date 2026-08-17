@@ -1078,6 +1078,16 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
                 f"{ehs_ci['hi_per_1000']:.2f} per 1000"
             )
         _row("EHS estimate (dose-response model)", _ehs_val)
+    # [2026-08-17] Criterion counts for the three heat-illness endpoints.
+    # Simulated counts, not calibrated incidence -- see the definitions
+    # block added after this table.
+    _ehs_c = hestia_result.get("pct_true_ehs_criterion") if hestia_result else None
+    if _ehs_c is not None:
+        _ehe_c = hestia_result.get("pct_true_ehe_criterion") or 0.0
+        _eac_c = hestia_result.get("pct_true_eac_criterion") or 0.0
+        _row("EHS criterion met (simulated count)", f"{_ehs_c*10:.1f} per 1000")
+        _row("EHE criterion met (simulated count)", f"{_ehe_c*10:.1f} per 1000")
+        _row("EAC criterion met (simulated count)", f"{_eac_c*10:.1f} per 1000")
     if broad_screen is not None:
         _row("Worth monitoring (broad screen: T_rect\u226540.5\u00b0C OR "
              "dehydration\u22652% OR RPE\u226517)", f"{broad_screen:.1f}%")
@@ -1143,6 +1153,60 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
                 _r = _p.add_run("\u26a0\ufe0f " + _c)
                 _r.italic = True
                 _r.font.color.rgb = RGBColor(0x7f, 0x1d, 0x1d)
+
+        if _ehs_c is not None:
+            _add_heading(doc, "The three criterion counts \u2014 what they mean", level=2)
+            _p = doc.add_paragraph()
+            _r = _p.add_run(
+                "These are model criterion counts, not calibrated incidence "
+                "estimates. The EHS estimate above comes from a dose-response "
+                "model fitted against observed Falmouth Road Race incidence; the "
+                "three counts are simply how many simulated runners per 1000 met "
+                "each criterion, with no fit against any observed dataset. They "
+                "are comparable to each other and between scenarios, but should "
+                "not be read as expected case counts."
+            )
+            _r.italic = True
+            for term, body in [
+                ("EHS \u2014 Exertional Heat Stroke",
+                 "Clinically: CNS dysfunction plus core temperature above 40.5\u00b0C "
+                 "(Roberts 2010; ACSM 2023). This model cannot simulate "
+                 "neurological status and substitutes cardiovascular "
+                 "decompensation (CO_reserve\u22640) for the CNS criterion \u2014 a "
+                 "conservative substitution: cerebral hypoperfusion has been "
+                 "measured at 40\u00b0C core temperature with cardiac output still "
+                 "intact (Nybo & Nielsen 2001)."),
+                ("EHE \u2014 Exertional Heat Exhaustion",
+                 "Clinically: inability to continue, core temperature typically "
+                 "38.5\u201340\u00b0C, without the CNS dysfunction that defines EHS "
+                 "(ACSM 2023). Modelled as T_rect>39.5\u00b0C and CO_reserve<0 at the "
+                 "same timestep, during exertion. Marks lost control margin: "
+                 "temperature holds only because heat production and loss happen "
+                 "to balance, while cardiovascular reserve keeps eroding "
+                 "underneath it."),
+                ("EAC \u2014 Exercise-Associated Collapse",
+                 "Clinically: a conscious athlete unable to stand or walk unaided "
+                 "after finishing, caused by postural hypotension when the muscle "
+                 "pump stops while skin vessels stay dilated (Asplund & O'Connor "
+                 "2011). Cardiovascular rather than thermal, so no temperature "
+                 "threshold is applied. Operationally the most relevant of the "
+                 "three for finish-line planning: EAC accounts for 59\u201385% of "
+                 "medical-tent visits, with a reference incidence of 1.53 per 1000 "
+                 "(Gothenburg Half Marathon) against which this count can be "
+                 "sanity-checked."),
+                ("CO_reserve",
+                 "The share of maximum cardiac output not already claimed by "
+                 "exercise and thermoregulation combined (Lloyd et al. 2022). Zero "
+                 "means no further increase in cooling capacity is available. All "
+                 "three criteria require both conditions at the SAME timestep \u2014 "
+                 "a temperature peak at 11:00 and a reserve trough at 13:00 do not "
+                 "count. This is the distinction from additive indices such as "
+                 "WBGT."),
+            ]:
+                _p = doc.add_paragraph()
+                _p.add_run(term + ". ").bold = True
+                _p.add_run(body)
+
         dose_warning = dose_positive_warning_text(
             n_dose_pos, n_dose_total,
             hestia_result.get("pct_first_aid") if hestia_result else None,

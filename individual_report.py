@@ -229,6 +229,74 @@ def generate_individual_report_docx(
         f"{result.conjunction_fraction:.0%} of ensemble runs"
     ).bold = True
 
+    p = doc.add_paragraph()
+    p.add_run(
+        f"EHE \u2014 exertional heat exhaustion (T_rect>39.5\u00b0C AND CO_reserve<0, "
+        f"during exertion): {result.ehe_fraction:.0%} of ensemble runs; "
+        f"mean dose {result.ehe_dose_mean:.2f}, median among affected runs {result.ehe_dose_among_hits:.2f}"
+    ).bold = True
+    p = doc.add_paragraph()
+    p.add_run(
+        f"EAC \u2014 exercise-associated collapse (CO_reserve<0 post-finish, no "
+        f"temperature condition): {result.eac_fraction:.0%} of ensemble runs; "
+        f"mean dose {result.eac_dose_mean:.2f}, median among affected runs {result.eac_dose_among_hits:.2f}"
+    ).bold = True
+
+    rg._add_heading(doc, "What these three criteria mean", level=2)
+    for term, body in [
+        ("EHS \u2014 Exertional Heat Stroke",
+         "Clinically: CNS dysfunction together with a core temperature above "
+         "40.5\u00b0C (Roberts 2010; ACSM 2023; NATA). This model cannot simulate "
+         "neurological status, so it substitutes cardiovascular decompensation "
+         "(CO_reserve\u22640) for the CNS criterion. That substitution is "
+         "conservative: cerebral hypoperfusion has been measured at 40\u00b0C core "
+         "temperature with cardiac output still intact (Nybo & Nielsen 2001), so "
+         "CNS dysfunction can occur before CO_reserve reaches zero. Systematic "
+         "under-detection is absorbed by calibrating the intercept against "
+         "observed EHS counts (Breslow et al. 2021, Boston Marathon)."),
+        ("EHE \u2014 Exertional Heat Exhaustion",
+         "Clinically: inability to continue, core temperature typically "
+         "38.5\u201340\u00b0C, WITHOUT the CNS dysfunction that defines EHS "
+         "(ACSM 2023). Modelled here as T_rect>39.5\u00b0C and CO_reserve<0 at the "
+         "same timestep, during exertion. Checked against this model's own output: "
+         "the state does NOT then progress to 40.5\u00b0C \u2014 temperature "
+         "plateaus at a genuine thermal steady state while CO_reserve keeps "
+         "eroding through dehydration, with the metabolic rate essentially "
+         "unchanged. It therefore marks LOST CONTROL MARGIN rather than impending "
+         "heat stroke: temperature holds only because production and loss happen "
+         "to balance, while the capacity to absorb any further disturbance "
+         "disappears. The dose (deficit integrated over time) carries this signal; "
+         "the yes/no flag does not."),
+        ("EAC \u2014 Exercise-Associated Collapse",
+         "Clinically: a conscious athlete unable to stand or walk unaided after "
+         "an endurance event, caused by postural hypotension when the muscle pump "
+         "stops at the finish line while skin vessels stay dilated (Asplund & "
+         "O'Connor 2011; Roberts 2007). It is cardiovascular, not thermal, so no "
+         "temperature threshold is applied \u2014 that omission is deliberate, not "
+         "an oversight. Collapse DURING a race points to a different and more "
+         "serious cause. Reference incidence for future calibration: 1.53 per 1000 "
+         "runners (Gothenburg Half Marathon); EAC accounts for 59\u201385% of "
+         "finish-line medical-tent visits."),
+        ("CO_reserve \u2014 cardiac output reserve",
+         "The share of maximum cardiac output not currently claimed by the demands "
+         "of exercise and thermoregulation combined (Lloyd et al. 2022). Zero means "
+         "the actuator is saturated: no further increase in cooling capacity is "
+         "available, though cooling already achieved continues. Negative values "
+         "indicate demand exceeding the heat-reduced maximum."),
+        ("Dose",
+         "The deficit integrated over time (L/min \u00d7 minutes) while a criterion "
+         "holds \u2014 weighting both how deep and how long, rather than treating "
+         "every qualifying moment alike."),
+        ("Conjunctive / simultaneous",
+         "All criteria here require both conditions at the SAME timestep. A "
+         "temperature peak at 11:00 and a reserve trough at 13:00 do not count. "
+         "This is the distinction from additive indices such as WBGT, and from "
+         "models that read each variable's extreme independently."),
+    ]:
+        para = doc.add_paragraph()
+        para.add_run(term + ". ").bold = True
+        para.add_run(body)
+
     for c in assessment_caveats(result):
         cp = doc.add_paragraph()
         cr = cp.add_run("\u26a0 " + c)
