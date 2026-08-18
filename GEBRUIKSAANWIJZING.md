@@ -4,13 +4,14 @@ Deze handleiding is voor mensen die de app **gebruiken**: organisatoren,
 hulpverleners, coaches, deelnemers. Voor het beheren van de Streamlit/
 GitHub-technische kant is er een aparte handleiding (`HANDLEIDING.md`).
 
-PYROX bestaat uit **drie apps**, en dit document behandelt ze alle drie:
+PYROX bestaat uit **vier apps**, en dit document behandelt ze alle vier:
 
 | App | Voor wie |
 |---|---|
 | **PYROX** (algemeen) | Beleid, beroepsgroepen, de brede bevolking |
 | **PYROX Participants** | Hardlopers, wandelaars, evenementenorganisatie — volledige methodologie |
 | **PYROX Beleid** | Beleidsmakers/organisatoren die snel het eindresultaat voor één specifieke run willen zien, zonder de onderzoeksmatige onderbouwing eromheen |
+| **PYROX Persoonlijk** | Eén met naam genoemde deelnemer die zijn eigen assessment wil, volledig lokaal op zijn eigen apparaat (zie §3.9) |
 
 De derde app, PYROX Beleid, is een sterk vereenvoudigde versie van PYROX
 Participants: dezelfde locatie-, tempo- en sessie-invoer, maar alleen de
@@ -22,6 +23,13 @@ er bewust niet in — die audience heeft er niet minder recht op, maar wél
 minder behoefte aan, en te veel methodologie op het verkeerde moment leidt
 juist af van de beslissing die genomen moet worden. Wie de volledige
 onderbouwing wil, gebruikt PYROX Participants.
+
+De vierde app, PYROX Persoonlijk, draait dezelfde HESTIA-motor als PYROX
+Beleid, maar dan voor precies één persoon in plaats van een gesimuleerde
+populatie: eigen lengte, gewicht, leeftijd, tempo en gewoontes, in plaats
+van een steekproef. Zie §3.9 voor de privacy-architectuur en het
+belangrijke onderscheid tussen "op je eigen apparaat draaien" en "een
+gedeelde link openen".
 
 **Sinds build 2026-08-14a** heeft PYROX Beleid ook een hindcast-modus: in
 de zijbalk kun je "Weather source" op "Historical (hindcast)" zetten en
@@ -254,6 +262,39 @@ tijdschaal-voorbehoud als §3.4 geldt hier ook.
 Upload een GPX-track voor een parcoursgebonden analyse: tempo, water­
 posten, en weersomstandigheden langs de route zelf.
 
+### 3.9 PYROX Persoonlijk — één deelnemer, eigen apparaat
+
+Zelfde HESTIA-motor als §3.6, maar met jouw eigen lengte, gewicht,
+leeftijd, tempo en gewoontes in plaats van een gesimuleerde populatie.
+De vergelijking "1000 gesimuleerde deelnemers" is dan niet meer zinvol —
+alle "deelnemers" ben jij, met alleen de dag-onzekerheden (windrichting,
+pacing-respons, zweetvariatie) herhaald getrokken. De app toont daarom
+een percentage van je eigen ensemble-runs, geen aantal per 1000, en een
+"2,5–97,5e percentiel"-band in plaats van een enkele lijn.
+
+**Privacy: leg dit eerst uit, niet achteraf.** De enige gegevens die de
+app naar buiten stuurt zijn de plaatsnaam en datum van het evenement, om
+het weer op te halen — nooit lengte, gewicht, leeftijd of een uitkomst.
+Dat geldt echter alleen voor **wie het proces daadwerkelijk draait**.
+Start jij `streamlit run app_persoonlijk.py` op je eigen pc, dan ben jij
+dat, en klopt de garantie volledig. Geef je iemand anders een gedeelde
+URL (inclusief een Streamlit Cloud-link), dan draait het proces nog
+steeds bij jou — zijn invoer komt bij jouw machine of bij de
+cloud-server terecht, niet bij hem. Er bestaat geen manier om een
+gemakkelijk te delen link te combineren met een gegarandeerd privé
+resultaat voor de bezoeker; dat is een grens van client-server-software
+zelf, geen tekortkoming van deze app. Wil je de app voor meerdere mensen
+beschikbaar maken met behoud van die garantie, dan moet ieder zijn eigen
+exemplaar starten (`git clone` + zelf `streamlit run`, of een
+Windows-installatie).
+
+Drie endpoints, niet één (zie de woordenlijst, §8, voor de volledige
+definities): **EHS** (gekalibreerd, per 1000, race + herstel), **EHE**
+(ongekalibreerd, percentage, alleen tijdens de inspanning), **EAC**
+(ongekalibreerd, percentage, alleen na de finish). Een Word-rapport met
+alle drie en een verklarende sectie is met één knop te downloaden onder
+de resultaten.
+
 ---
 
 ## 4. Waarom zeggen twee onderdelen soms iets anders?
@@ -360,9 +401,14 @@ voorspelling te bewaren tot je hem tegen de werkelijkheid kunt afzetten.
 | **UTCI** | Universal Thermal Climate Index — fysiologisch "voelt als"-getal |
 | **MRT** | Stralingstemperatuur van de omgeving (zon, hete oppervlakken) |
 | **MET** | Metabolic Equivalent — maat voor inspanningsintensiteit |
+| **RPE** | Rate of Perceived Exertion. Let op: dit model gebruikt de klassieke **Borg-schaal (6–20)**, niet de vaker gebruikte Borg CR10-schaal (0–10). Op de 6-20-schaal betekent 17 "very hard", geen middenwaarde. |
 | **T_rect / T_re** | Lichaamskerntemperatuur (rectaal gemeten/voorspeld) |
-| **CO_reserve** | Cardiovasculaire reserve — hoeveel "extra" hartminuutvolume er nog is |
-| **EHS** | Exertional Heat Stroke — inspanningsgebonden hitteberoerte |
+| **CO_reserve** | Cardiovasculaire reserve — hoeveel "extra" hartminuutvolume er nog is boven wat inspanning en warmteregulatie samen al opeisen. Nul betekent: geen verdere toename van koelcapaciteit meer beschikbaar. |
+| **Dosis** | Het tekort geïntegreerd over tijd (L/min × minuten) zolang een criterium geldt — weegt zowel hoe diep als hoe lang, in plaats van elk moment even zwaar te tellen. |
+| **Conjunctief / gelijktijdig** | Alle drie de criteria hieronder vereisen beide voorwaarden op **hetzelfde tijdstip**. Een temperatuurpiek om 11:00 en een reservedal om 13:00 tellen niet mee — dit is het onderscheid met optelbare indices zoals WBGT. |
+| **EHS** | Exertional Heat Stroke. Klinisch: CNS-disfunctie plus kerntemperatuur >40,5 °C. Dit model kan geen neurologische status simuleren en vervangt dat door cardiovasculaire decompensatie (T_rect≥40,5 °C én CO_reserve≤0) — een conservatieve vervanging. Enige gekalibreerde endpoint (tegen Falmouth-incidentie), vandaar het enige dat als "per 1000" wordt getoond. |
+| **EHE** | Exertional Heat Exhaustion. Klinisch: uitputting, kerntemperatuur doorgaans 38,5–40 °C, zónder de CNS-disfunctie die EHS definieert. Gemodelleerd als T_rect>39,5 °C én CO_reserve<0, alleen tijdens de inspanning. Markeert verloren regelmarge, niet een aanstaande hittebevanging. Ongekalibreerd — getoond als percentage, niet per 1000. |
+| **EAC** | Exercise-Associated Collapse. Klinisch: een bij bewustzijn zijnde sporter die na de finish niet zelfstandig kan staan of lopen, door bloeddrukval wanneer de spierpomp wegvalt. Cardiovasculair, niet thermisch — daarom geen temperatuurdrempel. Vereist een aanhoudend tekort, geen enkele korte dip. Ongekalibreerd in dit model (referentie-incidentie 1,53 per 1000, Göteborg, nog niet gefit) — getoond als percentage. |
 | **Reserve / collapse risk** | PYROX's meerdaagse maat voor resterende regelcapaciteit |
 
 ---

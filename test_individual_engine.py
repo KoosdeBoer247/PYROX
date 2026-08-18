@@ -473,8 +473,8 @@ def test_eac_window_scoping() -> bool:
     # Cool runner, but CO_reserve goes negative AFTER finishing.
     cool_pf = [{"t_rect": 38.5, "co_reserve": 2.0},
                {"t_rect": 38.4, "co_reserve": 1.8}]
-    cool_pf[-1]["t_rect_series_postfinish"] = [38.2, 38.0]
-    cool_pf[-1]["co_reserve_series_postfinish"] = [-0.4, -0.6]
+    cool_pf[-1]["t_rect_series_postfinish"] = [38.2] * 6
+    cool_pf[-1]["co_reserve_series_postfinish"] = [-0.4, -0.6, -0.7, -0.6, -0.5, -0.4]
     ok &= _check("EAC fires post-finish with no temperature condition",
                  eac_hit(cool_pf))
     ok &= _check("EAC dose > 0 in that case", eac_dose(cool_pf) > 0)
@@ -495,6 +495,47 @@ def test_eac_window_scoping() -> bool:
     return ok
 
 
+def test_eac_requires_sustained_deficit() -> bool:
+    """EAC must ignore a single transient dip below zero.
+
+    Measured on a severe scenario (30 C, 3 h, 5:00/km) before the dose
+    threshold was added: 40% of the population had at least one negative
+    post-finish step, but half of those had exactly ONE 30-second step
+    before recovering. simulate_post_finish() itself documents that
+    short dip as validated ordinary physiology on stopping -- not a
+    collapse, which keeps someone down for minutes. Requiring an
+    accumulated deficit above EAC_DOSE_THRESHOLD drops the count from
+    40% to 15% on the same scenario, and the empirical distribution has
+    a clear knee there (15% at 0.5, 15% at 1.0, 12.5% at 2.0)."""
+    print("EAC requires a sustained deficit, not one dip")
+    from individual_engine import eac_hit, eac_dose, EAC_DOSE_THRESHOLD
+    ok = True
+
+    def mk(pf_series):
+        rows = [{"t_rect": 38.5, "co_reserve": 2.0}]
+        rows[-1]["t_rect_series_postfinish"] = [38.0] * len(pf_series)
+        rows[-1]["co_reserve_series_postfinish"] = pf_series
+        return rows
+
+    # One 30-second step at -0.4 -> dose 0.2, below threshold.
+    transient = mk([1.0, -0.4, 1.2, 2.0])
+    ok &= _check("single shallow dip does NOT count as EAC", not eac_hit(transient),
+                 f"dose {eac_dose(transient):.2f} vs threshold {EAC_DOSE_THRESHOLD}")
+
+    # Sustained: many steps well below zero.
+    sustained = mk([-0.5] * 12)
+    ok &= _check("sustained deficit DOES count as EAC", eac_hit(sustained),
+                 f"dose {eac_dose(sustained):.2f}")
+
+    # A single very deep dip still counts -- depth as well as duration.
+    deep = mk([1.0, -3.0, 0.5])
+    ok &= _check("one deep dip also counts (dose weights depth, not just time)",
+                 eac_hit(deep), f"dose {eac_dose(deep):.2f}")
+
+    ok &= _check("no post-finish deficit -> no EAC", not eac_hit(mk([2.0, 3.0, 4.0])))
+    return ok
+
+
 if __name__ == "__main__":
     results = [
         test_timezone_localization(),
@@ -502,6 +543,7 @@ if __name__ == "__main__":
         test_zone_episode_classification(),
         test_ehe_eac_criteria(),
         test_eac_window_scoping(),
+        test_eac_requires_sustained_deficit(),
         test_full_pipeline_with_mocked_weather(),
         test_no_missing_required_args(),
         test_storage_roundtrip(),

@@ -1086,8 +1086,8 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
         _ehe_c = hestia_result.get("pct_true_ehe_criterion") or 0.0
         _eac_c = hestia_result.get("pct_true_eac_criterion") or 0.0
         _row("EHS criterion met (simulated count)", f"{_ehs_c*10:.1f} per 1000")
-        _row("EHE criterion met (simulated count)", f"{_ehe_c*10:.1f} per 1000")
-        _row("EAC criterion met (simulated count)", f"{_eac_c*10:.1f} per 1000")
+        _row("EHE criterion met (simulated)", f"{_ehe_c:.1f}% of simulated runners")
+        _row("EAC criterion met (simulated)", f"{_eac_c:.1f}% of simulated runners")
     if broad_screen is not None:
         _row("Worth monitoring (broad screen: T_rect\u226540.5\u00b0C OR "
              "dehydration\u22652% OR RPE\u226517)", f"{broad_screen:.1f}%")
@@ -1158,13 +1158,19 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
             _add_heading(doc, "The three criterion counts \u2014 what they mean", level=2)
             _p = doc.add_paragraph()
             _r = _p.add_run(
-                "These are model criterion counts, not calibrated incidence "
-                "estimates. The EHS estimate above comes from a dose-response "
-                "model fitted against observed Falmouth Road Race incidence; the "
-                "three counts are simply how many simulated runners per 1000 met "
-                "each criterion, with no fit against any observed dataset. They "
-                "are comparable to each other and between scenarios, but should "
-                "not be read as expected case counts."
+                "Only the EHS estimate above is calibrated: it comes from a "
+                "dose-response model fitted against observed Falmouth Road Race "
+                "incidence, so a rate per 1000 is meaningful for it. EHE and EAC "
+                "have no such fit. They count how many simulated runners met a "
+                "mechanistic criterion, and meeting a criterion is not the same "
+                "as developing the clinical syndrome: real EAC additionally "
+                "requires cerebral hypoperfusion, an upright posture and a "
+                "moment, while the criterion captures only the circulatory "
+                "precondition. These counts therefore sit well above observed "
+                "incidence (EAC reference: 1.53 per 1000, Gothenburg Half "
+                "Marathon) and are deliberately shown as percentages so they are "
+                "not read as expected case numbers. Use them to compare "
+                "scenarios and levels against each other."
             )
             _r.italic = True
             for term, body in [
@@ -1189,11 +1195,11 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
                  "after finishing, caused by postural hypotension when the muscle "
                  "pump stops while skin vessels stay dilated (Asplund & O'Connor "
                  "2011). Cardiovascular rather than thermal, so no temperature "
-                 "threshold is applied. Operationally the most relevant of the "
-                 "three for finish-line planning: EAC accounts for 59\u201385% of "
-                 "medical-tent visits, with a reference incidence of 1.53 per 1000 "
-                 "(Gothenburg Half Marathon) against which this count can be "
-                 "sanity-checked."),
+                 "threshold is applied. Requires a SUSTAINED deficit rather than a "
+                 "single dip below zero: a half-minute dip on stopping is ordinary "
+                 "physiology, not a collapse. Operationally the most relevant of "
+                 "the three for finish-line planning \u2014 EAC accounts for "
+                 "59\u201385% of medical-tent visits."),
                 ("CO_reserve",
                  "The share of maximum cardiac output not already claimed by "
                  "exercise and thermoregulation combined (Lloyd et al. 2022). Zero "

@@ -3,20 +3,31 @@
 An interactive web interface over the Thermopoulos Data Engine (weather
 acquisition and thermal-index processing), PYROX (population-tier
 heat-strain model), and HESTIA (individual-tier cardiovascular Monte Carlo
-model). Three Streamlit front-ends share the same modules:
+model). Four Streamlit front-ends share the same modules — two run on the
+PYROX population tier, two on the HESTIA individual tier:
 
-| App | Entry point | Audience |
-|---|---|---|
-| PYROX | `app.py` | General population, occupational groups, policy |
-| PYROX Participants | `app_athletes.py` | Runners and walkers, event organisers — full methodology |
-| PYROX Beleid | `app_beleid.py` | Policymakers/organisers who need one race's headline result, without the research-level caveats |
+| App | Entry point | Tier | Audience |
+|---|---|---|---|
+| PYROX | `app.py` | PYROX | General population, occupational groups, policy |
+| PYROX Participants | `app_athletes.py` | PYROX | Runners and walkers, event organisers — full methodology |
+| PYROX Beleid | `app_beleid.py` | HESTIA | Policymakers/organisers who need one race's headline result, without the research-level caveats |
+| PYROX Persoonlijk | `app_persoonlijk.py` | HESTIA | One named individual's own assessment for one event, run entirely on their own machine (see "Privacy architecture" below) |
+
+PYROX and HESTIA are deliberately separate model architectures, not one
+wrapping the other — `pyrox_model.py`/`pyrox_bridge.py`/`pyrox_groups.py`
+never call into `hestia_model.py`/`HESTIA_CVR_Module_v2.py`, or vice versa.
+PYROX estimates population-wide heat strain across broad groups; HESTIA
+simulates one specific person or a targeted group's individual physiology
+(JOS-3 thermoregulation + cardiovascular reserve). A fix to one tier does
+not touch the other — see "Recent HESTIA-tier fixes" below for exactly
+which apps a given change reaches.
 
 This document covers the **PYROX population-tier scope** in depth (it
-predates the HESTIA integration below and the third app, and keeps that
+predates the HESTIA integration below and the newer apps, and keeps that
 narrower focus deliberately — see "Why the calibration was revised"). For
 the HESTIA individual tier, the clo/hydration/dose-response fixes, and
-day-to-day usage of all three apps, see `GEBRUIKSAANWIJZING.md`. For
-GitHub/Streamlit deployment of all three apps, see `HANDLEIDING.md`.
+day-to-day usage of all four apps, see `GEBRUIKSAANWIJZING.md`. For
+GitHub/Streamlit deployment of all four apps, see `HANDLEIDING.md`.
 
 ---
 
@@ -61,18 +72,22 @@ roster remains untouched in `pyrox_groups.py` for comparison.
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py            # general app
-streamlit run app_athletes.py   # runners/walkers, full methodology
-streamlit run app_beleid.py     # simplified policy/organiser view
+streamlit run app.py               # general app
+streamlit run app_athletes.py      # runners/walkers, full methodology
+streamlit run app_beleid.py        # simplified policy/organiser view
+streamlit run app_persoonlijk.py   # one person's own assessment, local-only
 ```
 
 Each opens at `http://localhost:8501` (run one at a time, or on separate
 ports with `--server.port`).
 
-Run the acceptance tests for the revised calibration:
+Run the acceptance tests:
 
 ```bash
-python3 test_revised_calibration.py
+python3 test_revised_calibration.py    # PYROX population-tier calibration
+python3 test_cvr_freeze_fix.py         # HESTIA CVR fixes (see below)
+python3 test_uncertainty.py            # sampling + anchor interval
+python3 test_individual_engine.py      # app_persoonlijk.py / individual_engine.py
 ```
 
 ## Free hosting (Streamlit Community Cloud)
@@ -80,8 +95,9 @@ python3 test_revised_calibration.py
 1. Put this folder in a GitHub repository.
 2. Go to https://share.streamlit.io and sign in with GitHub.
 3. "New app" → select the repository → entry point `app.py`, `app_athletes.py`,
-   or `app_beleid.py` → Deploy. All three can point at the same repo — one
-   set of modules, three front-ends — so a fix reaches all three at once.
+   `app_beleid.py`, or `app_persoonlijk.py` → Deploy. All four can point at
+   the same repo — one set of modules, four front-ends — so a fix reaches
+   all four at once (within the tier it belongs to; see above).
 
 See `HANDLEIDING.md` for Python-version pinning and troubleshooting specific
 to Streamlit Community Cloud.
@@ -90,22 +106,30 @@ to Streamlit Community Cloud.
 
 | File | Purpose |
 |---|---|
-| `app.py` | Streamlit interface — general population app |
-| `app_athletes.py` | Streamlit interface — runners/walkers, full methodology |
-| `app_beleid.py` | Streamlit interface — simplified policy/organiser view |
+| `app.py` | Streamlit interface — general population app (PYROX tier) |
+| `app_athletes.py` | Streamlit interface — runners/walkers, full methodology (PYROX tier) |
+| `app_beleid.py` | Streamlit interface — simplified policy/organiser view (HESTIA tier) |
+| `app_persoonlijk.py` | Streamlit interface — one person's own assessment, local-only (HESTIA tier) |
 | `Thermopoulos_Data_Engine.py` | Weather acquisition, UHI, MRT, WBGT, UTCI |
 | `thermopoulos_loader.py` | Bridge from weather data to daily heat load |
 | `pyrox_model.py` | PYROX strain dynamics (paper Sec 2.2) |
 | `pyrox_groups.py` | Population group roster, original parameters |
 | `pyrox_revised_calibration.py` | Revised parameters, MET term, full rationale |
-| `pyrox_bridge.py` | PYROX execution + pace→MET conversion, shared by all three apps |
-| `hestia_model.py` | HESTIA individual-tier model (JOS-3, CVR, EHS outcomes, post-finish module) |
-| `hestia_bridge.py` | HESTIA quick-estimate / full-precision entry points, caching |
+| `pyrox_bridge.py` | PYROX execution + pace→MET conversion, shared by `app.py`/`app_athletes.py` |
+| `hestia_model.py` | HESTIA individual-tier model (JOS-3, CVR, EHS/EHE/EAC outcomes, post-finish module) |
+| `hestia_bridge.py` | HESTIA quick-estimate / full-precision entry points, caching, shared by `app_beleid.py`/`app_athletes.py` |
 | `HESTIA_CVR_Module_v2.py` | Cardiovascular reserve module (Lloyd et al. 2022) |
+| `individual_engine.py` | One-person HESTIA wrapper for `app_persoonlijk.py` — personal ensemble, EHE/EAC criteria, zone-episode classification |
+| `individual_report.py` | Word-report generator for `app_persoonlijk.py`, reusing `report_generator.py`'s building blocks |
+| `local_storage.py` | Local-only (no network) profile/history persistence for `app_persoonlijk.py` |
+| `uncertainty.py` | Sampling + anchor interval around the EHS dose-response estimate; used by both HESTIA-tier apps |
 | `decision_support.py` | Hourly activity/rest guidance, WBGT↔UTCI divergence check |
 | `gpx_route.py` | GPX parsing, race pace/exposure profiles along a route |
 | `terrain_lookup.py` | ESA WorldCover terrain classification (optional) |
-| `test_revised_calibration.py` | Acceptance tests for the revised calibration |
+| `test_revised_calibration.py` | Acceptance tests for the revised PYROX calibration |
+| `test_cvr_freeze_fix.py` | Regression tests: CO_reserve NaN-after-freeze fix, CO_reserve monotonicity fix |
+| `test_uncertainty.py` | Regression tests for the sampling + anchor interval |
+| `test_individual_engine.py` | Regression tests for `individual_engine.py` / `app_persoonlijk.py` |
 
 ---
 
@@ -304,6 +328,83 @@ revision below (all documented in code comments at their fix sites, and in
    T_rect (metabolic after-glow) and CO_reserve (acute venous pooling,
    Rowell 1974) for 10 minutes after the race ends, without pacing control.
 
+Four further defects found and fixed while building `app_persoonlijk.py`
+(2026-08-16/17), all in code shared by `app_beleid.py` too — see
+`test_cvr_freeze_fix.py` for regression coverage of the first two:
+
+4. **CO_reserve silently went NaN after a participant froze
+   (2026-08-16).** Once `runner_stopped=True` (RPE≥19.5), T_rect was
+   correctly carried forward, but the CVR input series stopped growing,
+   leaving CO_reserve at its NaN placeholder for the rest of that
+   participant's trace. Any participant who froze with T_rect≥40.5°C
+   was therefore invisible to the conjunctive criterion regardless of
+   their true CO_reserve. Measured impact: mean dose in an extreme test
+   scenario rose from 45.5 to 137.1 (3×) after the fix; effect scales
+   with scenario severity and was negligible in the mild scenarios
+   checked (Utrecht 31 May: unchanged).
+5. **CO_reserve was non-monotonic — and could turn positive — at
+   extreme heat strain (2026-08-17).** `co_reserve = (co_max_heat -
+   co_rest_heat) × (1 - f)`; past a certain CHSI, `co_rest_heat` exceeds
+   `co_max_heat` (first factor negative) while `f` is clipped above 1.0
+   (second factor also negative), so the product flipped positive —
+   reporting a healthy-looking reserve exactly where a participant could
+   not meet even resting demand. Fixed by flooring cardiac-output demand
+   at resting demand; unaffected wherever `co_max_heat > co_rest_heat`,
+   i.e. the entire physiologically normal range, so Lloyd et al. (2022)'s
+   coefficients are untouched.
+6. **The global RNG was unseeded (2026-08-17).** The main loop draws
+   drink volume from `np.random.uniform(120, 180)` — the only unseeded
+   randomness in the engine. `generate_base_population()` already seeds
+   the global RNG for the PYROX-tier population apps;
+   `run_individual_assessment()` (in `individual_engine.py`) now does the
+   same. Before this fix, the same inputs and the same `random_seed`
+   produced different results on every run (measured: dose changed for
+   49 of 60 participants between two runs of identical code).
+7. **The race window could silently shift 1-2 hours (2026-08-16).**
+   Comparing a naive local timestamp against `weather_df`'s tz-aware
+   index does not raise an error — it silently offsets the whole race
+   window by the local UTC offset (CET/CEST). Fixed via one shared
+   localisation helper (`individual_engine._localize_naive`), covered by
+   `test_timezone_localization` for both seasons.
+
+**Three heat-illness endpoints, not one (2026-08-17).** Checked against
+the literature after a definitional review: "collapse" as originally
+implemented conflated two distinct clinical entities. `hestia_model.py`
+and `individual_engine.py` now expose three, each with its own window and
+literature basis (see `EHS_T_THRESHOLD`/`EHE_T_THRESHOLD`/
+`EAC_CO_THRESHOLD` and their docstrings for the full derivation):
+
+| Endpoint | Criterion | Window | Anchor |
+|---|---|---|---|
+| **EHS** — Exertional Heat Stroke | T_rect≥40.5°C AND CO_reserve≤0 | race + post-finish | Falmouth (dose-response fit) |
+| **EHE** — Exertional Heat Exhaustion | T_rect>39.5°C AND CO_reserve<0 | race only | none (uncalibrated) |
+| **EAC** — Exercise-Associated Collapse | sustained CO_reserve<0 (no temperature condition) | post-finish only | Gothenburg Half Marathon, 1.53/1000 (not yet fitted) |
+
+EHE and EAC are reported as **percentages of the simulated population**,
+not rates per 1000: meeting a mechanistic criterion is not the same as
+the clinical syndrome (real EAC additionally requires cerebral
+hypoperfusion, an upright posture and a moment), so neither has the kind
+of observed-incidence fit that would make a per-1000 rate defensible.
+EAC's Gothenburg anchor is the strongest candidate for a second
+calibration point alongside Falmouth — not yet attempted.
+
+**Privacy architecture (`app_persoonlijk.py`, 2026-08-15/16).** Built for
+one named individual's own biometrics and one event, run entirely on
+whatever machine executes `streamlit run app_persoonlijk.py`. The only
+network calls anywhere in `individual_engine.py`'s call graph are
+geocoding the event location and fetching weather for it — audited
+directly against `Thermopoulos_Data_Engine.py`'s outgoing request
+parameters (lat/lon/date/units only, never a personal field). Local
+persistence (`local_storage.py`) writes outside the project folder
+(`%APPDATA%\PYROX` on Windows) specifically so a `git add .` in this repo
+cannot pick up personal data. **This guarantee holds only for whoever
+actually runs the process** — a Streamlit Cloud deployment or a shared
+URL moves that "local machine" to the server or host account, not the
+visitor's device; see `GEBRUIKSAANWIJZING.md` §3.9 for the deployment
+choice this implies.
+
 **Scope limit, unchanged from the original text:** this remains a
 screening-level simulation, not a validated clinical predictor for any
 named individual.
+
+

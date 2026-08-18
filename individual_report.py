@@ -266,7 +266,12 @@ def generate_individual_report_docx(
          "heat stroke: temperature holds only because production and loss happen "
          "to balance, while the capacity to absorb any further disturbance "
          "disappears. The dose (deficit integrated over time) carries this signal; "
-         "the yes/no flag does not."),
+         "the yes/no flag does not. Independent support: Cottle et al. (2024) "
+         "found cardiovascular strain (a sustained heart-rate rise) precedes "
+         "the point where core temperature begins rising continuously, in "
+         "chamber experiments on a different age group under resting exposure "
+         "-- the same temporal ordering this criterion targets, found "
+         "independently rather than assumed."),
         ("EAC \u2014 Exercise-Associated Collapse",
          "Clinically: a conscious athlete unable to stand or walk unaided after "
          "an endurance event, caused by postural hypotension when the muscle pump "

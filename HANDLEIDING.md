@@ -4,11 +4,13 @@ Deze handleiding beschrijft hoe je dit project beheert zonder opnieuw in de
 valkuilen te lopen die we onderweg zijn tegengekomen. Elke waarschuwing hierin
 staat er omdat het één keer is misgegaan.
 
-Versie van deze set: **build 2026-08-14a**
-Laatst geverifieerd: alle modules compileren, alle acceptatietests slagen,
-alle drie de apps starten zonder fouten. Let op: `app.py` en
-`app_athletes.py` staan op buildstempel 2026-08-12a, `app_beleid.py` op
-2026-08-14a — verschillende bestanden mogen verschillende buildstempels
+Versie van deze set: **build 2026-08-17a**
+Laatst geverifieerd: alle modules compileren, alle acceptatietests slagen
+(`test_revised_calibration.py`, `test_cvr_freeze_fix.py`,
+`test_uncertainty.py`, `test_individual_engine.py`), alle vier de apps
+starten zonder fouten. Let op: `app.py` en `app_athletes.py` staan op
+buildstempel 2026-08-12a, `app_beleid.py` en `app_persoonlijk.py` op
+2026-08-17a — verschillende bestanden mogen verschillende buildstempels
 hebben, zolang elk bestand zijn eigen stempel maar ophoogt bij een wijziging
 
 **Sinds 2026-08-14a, kort:** `app_beleid.py` heeft nu ook een hindcast-
@@ -51,12 +53,17 @@ paragraaf 3.6 voor de volledige uitleg.
 
 ## 1. De opzet in één alinea
 
-Eén GitHub-repository bevat alle bestanden. Streamlit draait daar **drie
-apps** uit, die verschillen in één ding: welk bestand het startpunt is.
-Alle modellen en rekenmodules worden gedeeld. Een correctie in bijvoorbeeld
-`decision_support.py` werkt daardoor meteen in alle drie de apps door. Dat
-is met opzet zo: meerdere kopieën van dezelfde logica lopen na verloop van
-tijd altijd uit elkaar, en niets waarschuwt je daarvoor.
+Eén GitHub-repository bevat alle bestanden. Streamlit draait daar **vier
+apps** uit, die verschillen in welk bestand het startpunt is en welke
+modelmotor eronder zit (zie `README.md`: PYROX-tier vs. HESTIA-tier).
+Binnen elke tier worden modellen en rekenmodules gedeeld. Een correctie in
+bijvoorbeeld `decision_support.py` werkt daardoor meteen door in de drie
+apps die het gebruiken (`app.py`, `app_athletes.py`, `app_beleid.py`) —
+`app_persoonlijk.py` heeft zijn eigen, kleinere module­set
+(`individual_engine.py`, `individual_report.py`, `local_storage.py`,
+`uncertainty.py`) en importeert `decision_support.py` niet. Dat is met
+opzet zo: meerdere kopieën van dezelfde logica lopen na verloop van tijd
+altijd uit elkaar, en niets waarschuwt je daarvoor.
 
 | App | Startbestand | Voor wie |
 |---|---|---|
@@ -84,13 +91,20 @@ de docstring bovenin het bestand.
 | `app_athletes.py` | De deelnemersapp: niveaus, tempo, wedstrijdvlaggen |
 | `app_beleid.py` | De beleidsapp: subset van `app_athletes.py`'s invoer, sterk vereenvoudigde uitvoer |
 
-### Applicatiemodules (gedeeld door alle drie de apps)
+### Applicatiemodules (gedeeld door `app.py` / `app_athletes.py` / `app_beleid.py`)
 
 | Bestand | Rol |
 |---|---|
 | `pyrox_bridge.py` | Draait het PYROX-model; tempo → MET (ACSM); duurweging |
 | `decision_support.py` | Uurlijkse vlaggen (ISO 7243 én atletiek), WBGT↔UTCI-kruiscontrole |
 | `loop_view.py` | Regellus: reserve, dagbalans, divergentie index vs. lustoestand |
+
+`app_persoonlijk.py` deelt geen van deze drie — die app heeft zijn eigen
+module­set (`individual_engine.py`, `individual_report.py`,
+`local_storage.py`, `uncertainty.py`), los van bovenstaande tabel. Wel
+gedeeld met `app_beleid.py`: de kernmotor (`hestia_model.py`,
+`HESTIA_CVR_Module_v2.py`, `hestia_bridge.py`) — zie `README.md`'s
+bestandenlijst voor het volledige overzicht.
 | `plain_view.py` | Accu-kaarten en tijdlijn voor niet-ingewijden |
 | `evidence.py` | Onderbouwing per claim, inclusief wat *niet* is aangetoond |
 | `gpx_route.py` | GPX inlezen, tempo/blootstelling langs de route, kaartje |
@@ -160,7 +174,7 @@ in plaats van de inhoud. Verwijder alles en doe het opnieuw.
 
 ---
 
-## 4. Streamlit: de drie apps
+## 4. Streamlit: de vier apps
 
 ### ⚠️ EERST: kies Python 3.12
 
@@ -204,10 +218,27 @@ Repository: je PYROX-repo · Branch: `main` · **Main file path: `app.py`**
 ### De derde app aanmaken (beleidsweergave)
 
 Zelfde procedure, met **Main file path: `app_beleid.py`**. Ook deze
-deployment wijst naar dezelfde repo — één set modules, drie front-ends, dus
-een fix in bijvoorbeeld `hestia_bridge.py` bereikt alle drie tegelijk. Kies
-een URL die het onderscheid met de andere twee duidelijk maakt, bijvoorbeeld
-`pyrox-beleid`.
+deployment wijst naar dezelfde repo — één set modules, vier front-ends, dus
+een fix in bijvoorbeeld `hestia_bridge.py` bereikt zowel deze als de vierde
+app tegelijk. Kies een URL die het onderscheid met de andere apps duidelijk
+maakt, bijvoorbeeld `pyrox-beleid`.
+
+### De vierde app aanmaken (persoonlijke weergave)
+
+Zelfde procedure, met **Main file path: `app_persoonlijk.py`**. Deze app
+draait op dezelfde HESTIA-motor als `app_beleid.py` (`individual_engine.py`
+roept `hestia_model.py`/`HESTIA_CVR_Module_v2.py` rechtstreeks aan), dus een
+fix in die motor bereikt beide automatisch — maar de app-laag zelf
+(`individual_engine.py`, `individual_report.py`, `local_storage.py`,
+`app_persoonlijk.py`) is uniek voor deze deployment en moet net als de
+andere apps in zijn geheel worden meegeüpload.
+
+**Privacy-overweging bij het kiezen van een URL:** deel deze URL niet
+achteloos. De garantie "blijft op de eigen machine" geldt alleen voor wie
+het proces zelf draait — bij een gedeelde Streamlit Cloud-link is dat deze
+deployment, niet de bezoeker. Zie `GEBRUIKSAANWIJZING.md` §3.9 en
+`README.md`'s privacy-architectuur-paragraaf voor de volledige uitleg
+voordat je deze URL doorstuurt.
 
 ### Na elke upload
 
@@ -226,10 +257,10 @@ Onderin de zijbalk staat:
 
 ```
 Build 2026-08-12a (...)   ← app.py / app_athletes.py
-Build 2026-08-12c (...)   ← app_beleid.py
+Build 2026-08-17a (...)   ← app_beleid.py / app_persoonlijk.py
 ```
 
-De drie apps hebben elk hun **eigen** `APP_BUILD`-stempel — dat is normaal,
+De vier apps hebben elk hun **eigen** `APP_BUILD`-stempel — dat is normaal,
 zolang elke stempel maar hoort bij de laatste wijziging in dát bestand. Het
 gaat mis als een stempel *lager* is dan je verwacht op basis van een recente
 wijziging: dan is dat specifieke bestand niet meegekomen bij het uploaden.
@@ -403,8 +434,9 @@ Bij elke nieuwe upload:
 
 Bij een codewijziging bovendien:
 
-- [ ] Buildstempels opgehoogd in gewijzigde bestanden én in alle drie de apps
-      die het bestand gebruiken
+- [ ] Buildstempels opgehoogd in gewijzigde bestanden én in elke app die
+      het bestand gebruikt (zie `README.md`'s bestandenlijst welke apps
+      dat zijn — niet alle vier delen alles)
 - [ ] `test_revised_calibration.py` geslaagd
 
 ---
@@ -654,3 +686,38 @@ Implementatie: `hestia_bridge.py` berekent `pct_true_ehe_criterion` en
 via dezelfde `conjunctive_hit()`/`eac_hit()` uit `individual_engine.py`
 (lazy import wegens circulaire afhankelijkheid) — één implementatie
 gedeeld door de populatie- en persoonlijke route, geen tweede kopie.
+
+---
+
+## EAC: drempel op de dosis, en terug naar percentages (2026-08-17)
+
+**Waarom de EAC-getallen te hoog waren.** Het criterium telde elke
+nuldoorgang van CO_reserve in het post-finish-venster. Gemeten op een
+zwaar scenario (30 °C, 3 uur, 5:00/km): 40% van de populatie had minstens
+één negatieve stap — maar de hélft daarvan had er precies één van 30
+seconden, waarna herstel volgde. `simulate_post_finish()` documenteert die
+korte dip zelf als gevalideerde, normale fysiologie bij het stoppen. Wie
+werkelijk in elkaar zakt, ligt daar minuten.
+
+`EAC_DOSE_THRESHOLD = 0.5` vereist nu een opgebouwd tekort. De empirische
+verdeling heeft daar een duidelijke knik: 40% bij drempel 0, 15% bij 0,5,
+en daarna vlak (15% bij 1,0, 12,5% bij 2,0). De dosis weegt zowel diepte
+als duur, dus één diepe dip telt ook mee. Voor EHE is géén drempel
+toegevoegd: daar is één tijdstap 10 minuten, dus per definitie geen
+transiënt.
+
+**Presentatie in de beleidsapp aangepast.** EHS blijft per 1000 — dat is
+het enige gekalibreerde getal (dosis-respons tegen Falmouth). EHE en EAC
+staan nu als **percentage van gesimuleerde deelnemers**, niet per 1000.
+Reden: een criteriumtelling ligt per definitie ordes van grootte boven de
+klinische incidentie, omdat het voldoen aan een mechanistische voorwaarde
+niet hetzelfde is als het syndroom (echte EAC vereist daarnaast cerebrale
+hypoperfusie, een rechtopstaande houding en een moment). "EAC 450 per
+1000" naast een waargenomen 1,53 per 1000 nodigt uit tot de conclusie dat
+het model onzin is; een percentage voorkomt die valse vergelijkbaarheid.
+
+**Openstaand werk:** EAC kalibreren tegen het Göteborg-anker (1,53 per
+1000), zoals EHS tegen Falmouth is gekalibreerd. Dat is het enige
+endpoint waarvoor die data bestaat, en daarna mag het wél per 1000.
+
+Test: `test_individual_engine.py::test_eac_requires_sustained_deficit`.

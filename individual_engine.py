@@ -668,6 +668,21 @@ EHS_CO_THRESHOLD = 0.0
 #: more informative output than the yes/no flag -- erosion is the
 #: phenomenon, not threshold-crossing.
 #:
+#: Independent confirmation (2026-08-19): Kong et al., "Exceeding human
+#: heat tolerance in a warming, ageing world" (Lancet Planet Health,
+#: 2026) cites chamber-experiment evidence from the same PSU HEAT
+#: Project lineage (Cottle et al. 2024, J Appl Physiol) that
+#: "cardiovascular strain, indicated by a sustained increase in heart
+#: rate, occurs before core temperature begins to rise continuously."
+#: That is the same temporal ordering this criterion targets -- found
+#: independently, in a different age group (middle-aged, 40-59) and a
+#: different exposure type (resting/ADL heat exposure, not exercise),
+#: which is exactly the kind of independent replication a single-anchor,
+#: uncalibrated criterion like this one benefits from. It does not
+#: calibrate EHE (their thresholds are for near-resting metabolic rate,
+#: an order of magnitude below marathon MET, so the exposure regime does
+#: not transfer directly) -- but it corroborates the mechanism.
+#:
 #: NOT the same construct as hestia_model.py's existing `p_collapse`
 #: two-phase logistic. That model reads t_rect_max_per_sim (maximum over
 #: the whole trace) and res_min (minimum over the whole trace)
@@ -702,6 +717,33 @@ EHE_CO_THRESHOLD = 0.0
 #: reported as an ensemble fraction like the others, pending a proper
 #: dose-response fit against that anchor.
 EAC_CO_THRESHOLD = 0.0
+
+#: Minimum accumulated post-finish deficit (L/min x minutes) before EAC
+#: is counted. Requiring merely ONE crossing of zero produced obvious
+#: false positives: measured on a severe scenario (30 C, 3 h, 5:00/km),
+#: 40% of the population had at least one negative post-finish step, but
+#: HALF of those had exactly one 30-second step before recovering. A
+#: single half-minute dip is not a collapse -- it is the ordinary
+#: blood-pressure drop on stopping, which simulate_post_finish() itself
+#: documents as a validated acute dip that occurs and recovers inside
+#: this window. Someone who actually collapses stays down for minutes.
+#:
+#: The empirical distribution has a clear knee: raising the threshold
+#: from 0 to 0.5 drops the count from 40% to 15%, after which it is
+#: nearly flat (15% at 1.0, 12.5% at 2.0). 0.5 therefore sits at the
+#: elbow -- it removes the single-step transients without cutting into
+#: the sustained cases.
+#:
+#: This does NOT make the count a clinical incidence. Meeting a
+#: mechanistic precondition is not the same as the syndrome: real EAC
+#: additionally requires cerebral hypoperfusion, an upright posture and
+#: a moment. The count therefore still sits orders of magnitude above
+#: observed incidence (1.53 per 1000, Gothenburg Half Marathon), exactly
+#: as the EHS criterion count does against Falmouth. Calibrating against
+#: the Gothenburg anchor -- the way pct_dose_response_ehs is calibrated
+#: against Falmouth -- remains the outstanding work that would turn this
+#: into a genuine rate.
+EAC_DOSE_THRESHOLD = 0.5
 
 
 def conjunctive_hit(res: list, t_threshold: float, co_threshold: float,
@@ -743,12 +785,11 @@ def conjunctive_hit(res: list, t_threshold: float, co_threshold: float,
 
 
 def eac_hit(res: list) -> bool:
-    """EAC: CO_reserve < 0 anywhere in the post-finish window, with NO
-    temperature condition. See EAC_CO_THRESHOLD's note for why imposing
-    one would be wrong rather than merely conservative."""
-    pf_c = res[-1].get("co_reserve_series_postfinish") or []
-    return any(c is not None and not np.isnan(c) and c < EAC_CO_THRESHOLD
-               for c in pf_c)
+    """EAC: a SUSTAINED post-finish cardiac-output deficit, with no
+    temperature condition. See EAC_CO_THRESHOLD for why imposing one
+    would be wrong rather than merely conservative, and
+    EAC_DOSE_THRESHOLD for why a single zero-crossing is not enough."""
+    return eac_dose(res) > EAC_DOSE_THRESHOLD
 
 
 def ehe_dose(res: list) -> float:

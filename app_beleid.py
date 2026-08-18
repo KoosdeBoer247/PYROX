@@ -523,25 +523,34 @@ if st.session_state.results and selected_levels:
                           help="T_rect\u226540.5\u00b0C AND CO_reserve\u22640 at the same "
                                "timestep, during the race or shortly after.")
                 k2.metric("EHE \u2014 exertional heat exhaustion",
-                          f"{(_ehe_c or 0)*10:.1f} per 1000",
+                          f"{(_ehe_c or 0):.1f}% of simulated runners",
                           help="T_rect>39.5\u00b0C AND CO_reserve<0 at the same "
-                               "timestep, during exertion only.")
+                               "timestep, during exertion only. Shown as a "
+                               "percentage rather than per 1000 \u2014 see the "
+                               "explanation below.")
                 k3.metric("EAC \u2014 exercise-associated collapse",
-                          f"{(_eac_c or 0)*10:.1f} per 1000",
-                          help="CO_reserve<0 in the 10 minutes after finishing. "
-                               "No temperature condition \u2014 EAC is "
-                               "cardiovascular, not thermal.")
-                with st.expander(f"\u2139\ufe0f What these three mean, and how they "
-                                 f"differ from the estimate above \u2014 {lvl}"):
+                          f"{(_eac_c or 0):.1f}% of simulated runners",
+                          help="A sustained cardiac-output deficit in the 10 "
+                               "minutes after finishing. No temperature condition "
+                               "\u2014 EAC is cardiovascular, not thermal.")
+                with st.expander(f"\u2139\ufe0f What these three mean, and why only "
+                                 f"EHS is shown per 1000 \u2014 {lvl}"):
                     st.markdown(
-                        "**These are model criterion counts, not calibrated "
-                        "incidence estimates.** The EHS figure at the top of this "
-                        "page comes from a dose-response model fitted against "
-                        "observed Falmouth Road Race incidence. The three numbers "
-                        "here are simply how many simulated runners per 1000 met "
-                        "each criterion \u2014 no fit against any observed dataset. "
-                        "They are directly comparable to *each other* and between "
-                        "scenarios, but should not be read as expected case counts."
+                        "**Only the EHS figure is calibrated.** The EHS estimate at "
+                        "the top of this page comes from a dose-response model "
+                        "fitted against observed Falmouth Road Race incidence, so a "
+                        "rate per 1000 is meaningful for it. EHE and EAC have no "
+                        "such fit \u2014 they are counts of how many simulated "
+                        "runners met a mechanistic criterion, and meeting a "
+                        "criterion is not the same as developing the clinical "
+                        "syndrome. Real EAC additionally requires cerebral "
+                        "hypoperfusion, an upright posture and a moment; the "
+                        "criterion captures only the circulatory precondition. "
+                        "These counts therefore sit well above observed incidence "
+                        "(EAC reference: 1.53 per 1000, Gothenburg Half Marathon) "
+                        "and are shown as percentages precisely so they are not "
+                        "read as expected case numbers. Use them to compare "
+                        "scenarios and levels against each other."
                     )
                     st.markdown(
                         "- **EHS \u2014 Exertional Heat Stroke.** Clinically: CNS "
@@ -568,11 +577,11 @@ if st.session_state.results and selected_levels:
                         "finishing, from postural hypotension when the muscle pump "
                         "stops while skin vessels stay dilated (Asplund & O'Connor "
                         "2011). Cardiovascular, not thermal \u2014 hence no "
-                        "temperature threshold. Operationally the most relevant of "
-                        "the three for finish-line planning: EAC accounts for "
-                        "59\u201385% of medical-tent visits, with a reference "
-                        "incidence of 1.53 per 1000 (Gothenburg Half Marathon) "
-                        "against which this figure can be sanity-checked."
+                        "temperature threshold. Requires a SUSTAINED deficit, not a "
+                        "single dip below zero: a half-minute dip on stopping is "
+                        "ordinary physiology, not a collapse. Operationally the "
+                        "most relevant of the three for finish-line planning \u2014 "
+                        "EAC accounts for 59\u201385% of medical-tent visits."
                     )
                     st.markdown(
                         "- **CO_reserve.** The share of maximum cardiac output not "
