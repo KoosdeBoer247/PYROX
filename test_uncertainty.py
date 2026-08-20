@@ -178,6 +178,64 @@ def test_reproducibility() -> bool:
                   and a["hi_per_1000"] == b["hi_per_1000"])
 
 
+def test_fraction_interval() -> bool:
+    """Exact (Clopper-Pearson) intervals for criterion counts.
+
+    Motivation, measured 2026-08-19: the same scenario at n=100, five
+    different seeds, produced 1%, 5%, 4%, 4%, 1% -- a fivefold spread
+    from sampling alone. Nothing in the reported percentage showed that.
+    These tests pin the properties that make the interval trustworthy in
+    exactly the regime this suite operates in: small k, small p."""
+    print("Criterion-fraction intervals (Clopper-Pearson)")
+    from uncertainty import (fraction_interval, format_fraction_interval,
+                             fraction_caveats)
+    ok = True
+
+    # k=0 must NOT produce a zero-width interval. The normal
+    # approximation does exactly that, implying certainty where there is
+    # none -- the reason this is exact rather than approximate.
+    r0 = fraction_interval(0, 100)
+    ok &= _check("k=0 gives lower bound 0", r0["lo"] == 0.0)
+    ok &= _check("k=0 does NOT imply certainty (upper bound > 0)",
+                 r0["hi"] > 0.02, f"hi={r0['hi']:.4f}")
+    ok &= _check("k=0 upper bound is the rule-of-three ballpark (~3/n)",
+                 0.02 < r0["hi"] < 0.05, f"hi={r0['hi']:.4f}")
+
+    # k=n is the mirror image and must not imply certainty either.
+    rn = fraction_interval(100, 100)
+    ok &= _check("k=n gives upper bound 1", rn["hi"] == 1.0)
+    ok &= _check("k=n does NOT imply certainty (lower bound < 1)", rn["lo"] < 0.98)
+
+    # The interval must always bracket the point estimate, and narrow
+    # as n grows for the same proportion.
+    mid = fraction_interval(8, 100)
+    ok &= _check("interval brackets the point estimate",
+                 mid["lo"] <= mid["point"] <= mid["hi"])
+    wide, narrow = fraction_interval(8, 100), fraction_interval(80, 1000)
+    ok &= _check("same proportion, 10x n -> narrower interval",
+                 (narrow["hi"] - narrow["lo"]) < (wide["hi"] - wide["lo"]))
+
+    # Caveats must fire on thin counts and stay silent on solid ones --
+    # otherwise they are either useless or noise.
+    ok &= _check("thin count (3 of 40) triggers a caveat",
+                 len(fraction_caveats(fraction_interval(3, 40))) > 0)
+    ok &= _check("k=0 triggers a caveat", len(fraction_caveats(r0)) > 0)
+    ok &= _check("solid count (45 of 100) triggers NO caveat",
+                 len(fraction_caveats(fraction_interval(45, 100))) == 0)
+
+    # The rendering must show the raw count, not just the percentage:
+    # '8%' and '3 of 40' are the same number but not the same warning.
+    txt = format_fraction_interval(fraction_interval(3, 40))
+    ok &= _check("rendering includes the raw count", "3" in txt and "40" in txt,
+                 txt)
+
+    # Degenerate input must be reported, not silently returned as 0.
+    ok &= _check("empty ensemble returns an error", "error" in fraction_interval(0, 0))
+    ok &= _check("k>n returns an error", "error" in fraction_interval(5, 3))
+    return ok
+
+
+
 if __name__ == "__main__":
     results = [
         test_falmouth_reconstruction(),
@@ -186,6 +244,7 @@ if __name__ == "__main__":
         test_degenerate_cases(),
         test_caveats_always_lead_with_the_limitation(),
         test_reproducibility(),
+        test_fraction_interval(),
     ]
     print()
     print(f"{sum(results)}/{len(results)} test groups passed")

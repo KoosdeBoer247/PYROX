@@ -270,10 +270,13 @@ if result is not None:
         )
     m3.metric("T_rect piek (mediaan)", f"{np.nanmax(result.t_rect_median):.2f}\u00b0C")
 
+    from uncertainty import fraction_interval, format_fraction_interval, fraction_caveats
+    _ehe_ci = fraction_interval(result.ehe_hits, result.n_ensemble)
+    _eac_ci = fraction_interval(result.eac_hits, result.n_ensemble)
     e1, e2 = st.columns(2)
     e1.metric(
         "EHE \u2014 uitputting door hitte (T_rect>39,5\u00b0C \u00e9n CO_reserve<0)",
-        f"{result.ehe_fraction:.0%} van je ensemble-runs",
+        format_fraction_interval(_ehe_ci),
         delta=f"dosis: gem. {result.ehe_dose_mean:.2f} | {result.ehe_dose_among_hits:.2f} bij getroffenen",
         delta_color="off",
         help="Exertional Heat Exhaustion: uitputting door hitte tijdens de inspanning. "
@@ -285,7 +288,7 @@ if result is not None:
     )
     e2.metric(
         "EAC \u2014 collaps na de finish (CO_reserve<0, geen temperatuureis)",
-        f"{result.eac_fraction:.0%} van je ensemble-runs",
+        format_fraction_interval(_eac_ci),
         delta=f"dosis: gem. {result.eac_dose_mean:.2f} | {result.eac_dose_among_hits:.2f} bij getroffenen",
         delta_color="off",
         help="Exercise-Associated Collapse: het niet zelfstandig kunnen staan of lopen "
@@ -293,6 +296,15 @@ if result is not None:
              "Cardiovasculair, niet thermisch \u2014 daarom bewust z\u00f3nder "
              "temperatuurdrempel.",
     )
+    _fc = (fraction_caveats(_ehe_ci, "EHE-criterium")
+           + fraction_caveats(_eac_ci, "EAC-criterium"))
+    if _fc:
+        with st.expander("\u26a0\ufe0f Hoe nauwkeurig zijn deze percentages?"):
+            for _c in _fc:
+                st.markdown("- " + _c)
+            st.caption(
+                "Dit gaat uitsluitend over het aantal simulaties, niet over de "
+                "vraag of de fysiologie of de drempels kloppen.")
     if "error" not in ehs:
         def _freq_phrase(lo1000: float, hi1000: float) -> str:
             lo_r, hi_r = round(lo1000), round(hi1000)

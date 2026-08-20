@@ -229,16 +229,20 @@ def generate_individual_report_docx(
         f"{result.conjunction_fraction:.0%} of ensemble runs"
     ).bold = True
 
+    from uncertainty import (fraction_interval as _fi,
+                              format_fraction_interval as _ffi)
+    _ehe_ci = _fi(result.ehe_hits, result.n_ensemble)
+    _eac_ci = _fi(result.eac_hits, result.n_ensemble)
     p = doc.add_paragraph()
     p.add_run(
         f"EHE \u2014 exertional heat exhaustion (T_rect>39.5\u00b0C AND CO_reserve<0, "
-        f"during exertion): {result.ehe_fraction:.0%} of ensemble runs; "
+        f"during exertion): {_ffi(_ehe_ci)}; "
         f"mean dose {result.ehe_dose_mean:.2f}, median among affected runs {result.ehe_dose_among_hits:.2f}"
     ).bold = True
     p = doc.add_paragraph()
     p.add_run(
         f"EAC \u2014 exercise-associated collapse (CO_reserve<0 post-finish, no "
-        f"temperature condition): {result.eac_fraction:.0%} of ensemble runs; "
+        f"temperature condition): {_ffi(_eac_ci)}; "
         f"mean dose {result.eac_dose_mean:.2f}, median among affected runs {result.eac_dose_among_hits:.2f}"
     ).bold = True
 

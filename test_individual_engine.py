@@ -348,7 +348,7 @@ def test_storage_roundtrip() -> bool:
         t_rect_hi=np.array([37.5, 38.5, 39.0, 38.6]),
         co_reserve_median=np.array([3.0, 2.5, 4.0, 4.5]), co_reserve_lo=np.array([2.5, 2.0, 3.5, 4.0]),
         co_reserve_hi=np.array([3.5, 3.0, 4.5, 5.0]),
-        conjunction_fraction=0.0, ehe_fraction=0.0, ehe_dose_mean=0.0, ehe_dose_among_hits=0.0,
+        conjunction_fraction=0.0, ehs_hits=0, ehe_hits=0, eac_hits=0, ehe_fraction=0.0, ehe_dose_mean=0.0, ehe_dose_among_hits=0.0,
         eac_fraction=0.0, eac_dose_mean=0.0, eac_dose_among_hits=0.0,
         ehs_interval={"point_per_1000": 1.0, "lo_per_1000": 0.5, "hi_per_1000": 1.5, "alpha": 0.05},
         mean_t_air_c=20.0, city_name="Amsterdam",

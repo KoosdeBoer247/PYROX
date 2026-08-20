@@ -721,3 +721,67 @@ het model onzin is; een percentage voorkomt die valse vergelijkbaarheid.
 endpoint waarvoor die data bestaat, en daarna mag het wél per 1000.
 
 Test: `test_individual_engine.py::test_eac_requires_sustained_deficit`.
+
+---
+
+## Fase 1: steekproefprecisie zichtbaar gemaakt (2026-08-19)
+
+**Het gemeten probleem.** Dezelfde scenario-opzet, dezelfde ensemblegrootte
+(n=100), alleen een andere seed, vijf keer gedraaid:
+
+| seed | 11 | 22 | 33 | 44 | 55 |
+|---|---|---|---|---|---|
+| EHE-schatting | 1% | 5% | 4% | 4% | 1% |
+
+Een vijfvoudig verschil, puur door toeval. Dit verklaart de sprongen
+verspreid over de rapporten van dit project (een fractie die van 0% naar
+45% gaat tussen naburige scenario's; de DtD-vrouwencurve die van 8% naar
+4% knikt tussen 50 en 55 jaar). Niets in het gerapporteerde percentage
+liet zien hoe onnauwkeurig het was.
+
+**Wat is toegevoegd.** `uncertainty.fraction_interval()` geeft een exact
+Clopper-Pearson-interval bij een criteriumtelling k/n, plus
+`format_fraction_interval()` (die de RUWE TELLING toont, niet alleen het
+percentage) en `fraction_caveats()` (die automatisch waarschuwt bij k=0,
+k<5, of een bovengrens boven 3x de puntschatting).
+
+Exact, niet normaal-benaderd: de normale benadering is juist onbetrouwbaar
+bij kleine k en kleine p, en klapt bij k=0 dicht tot een interval van
+nul breedte — wat zekerheid suggereert waar die niet is.
+
+**Effect, op het DtD-scenario dat de aanleiding was:**
+- was: `EHE 8%`
+- nu: `EHE 8% (6 van 80; 95%-interval 3%-16%)`
+- en bij een nulwaarde verschijnt nu automatisch: *"Geen enkele run haalde
+  het EAC-criterium. Dat betekent niet dat de kans nul is: bij 80 runs is
+  alles tot 5% verenigbaar met deze uitkomst."*
+
+Doorgevoerd in `app_persoonlijk.py`, `app_beleid.py`, `individual_report.py`
+en `report_generator.py`. De ruwe tellingen worden nu bewaard op
+`IndividualAssessment` (`ehs_hits`/`ehe_hits`/`eac_hits`) en in de
+populatieroute (`n_true_*_hits`, `n_simulations_used`).
+
+**Bewust NIET toegevoegd: effectieve steekproefgrootte (ESS).** Bij
+ongewogen Monte Carlo is ESS per definitie gelijk aan n en draagt geen
+informatie. ESS wordt pas een diagnose zodra importance sampling bestaat
+(fase 2), waar het gewichtsdegeneratie detecteert. Een kolom die altijd
+"100/100" toont zou suggereren dat er iets gecontroleerd wordt.
+
+**Wat dit NIET oplost.** Dit maakt de precisie van de schatting binnen het
+eigen model zichtbaar. Het zegt niets over de dosis-responscurve, die op
+vijf Falmouth-ijkpunten rust en waarvan de helling niet geïdentificeerd
+is. Nauwkeuriger meten van een onzekere curve verplaatst dat probleem
+niet.
+
+**Onderzocht en vooralsnog niet doorgevoerd (fase 2/3):**
+- *Naïeve importance sampling* verslechterde de zaak: schattingen 3,9 /
+  3,0 / 6,1 / **13,4** / 3,5%, met ESS 8-19 van 100 — gewichtsdegeneratie.
+- *Defensieve mengverdeling* (helft natuurlijk, helft verschoven, gewicht
+  begrensd op 1/alpha=2) werkte wel: 2,6 / 2,2 / 3,1 / 2,0 / 4,0%,
+  ESS ~69. Standaarddeviatie van 1,87% naar 0,79% — factor 2,4 minder
+  ruis, equivalent aan ~6x minder simulaties voor dezelfde precisie.
+- *GPD-staartfit* op 500 gepoolde runs reproduceerde de telling (3,02% /
+  2,98% / 2,75% bij drie drempels tegen 3,00% geteld) maar met 51-99
+  informatieve punten in plaats van 15.
+
+Test: `test_uncertainty.py::test_fraction_interval` (7/7 groepen).

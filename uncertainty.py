@@ -322,3 +322,91 @@ def interval_caveats(res: dict) -> list[str]:
             f"a variance and is not included in it."
         )
     return notes
+
+
+# =============================================================================
+# Criterion-fraction sampling precision (phase 1, 2026-08-19)
+# =============================================================================
+#: The EHE/EAC/conjunction figures elsewhere in this suite are counts of
+#: how many ensemble members met a criterion, divided by ensemble size.
+#: With a thin tail that ratio is a NOISY estimator, and nothing in the
+#: reported number showed how noisy.
+#:
+#: Measured directly (2026-08-19): the same scenario, the same n=100
+#: ensemble, five different seeds, gave 1%, 5%, 4%, 4%, 1% -- a fivefold
+#: spread from sampling alone. That is the source of the jumps seen
+#: across this project's reports (a fraction moving 0% -> 45% between
+#: adjacent scenarios, or the DtD female curve kinking from 8% to 4%
+#: between 50 and 55 years).
+#:
+#: These helpers make that precision visible instead of leaving it to be
+#: guessed at, or to be caught by hand in prose each time.
+#:
+#: NOT included here: effective sample size. For unweighted Monte Carlo
+#: ESS equals n by construction and carries no information; it only
+#: becomes a diagnostic once importance sampling exists (planned phase
+#: 2), where it detects weight degeneracy. Adding a column that always
+#: reads "100/100" would suggest a check is happening when none is.
+
+
+def fraction_interval(k: int, n: int, alpha: float = 0.05) -> dict:
+    """Exact (Clopper-Pearson) interval for a criterion fraction k/n.
+
+    Exact rather than normal-approximation on purpose: the normal
+    approximation is unreliable precisely in the regime this suite
+    operates in (small k, small p), and degenerates completely at k=0,
+    where it returns a zero-width interval implying certainty.
+
+    Covers ONE source of error: the finite number of ensemble members.
+    It says nothing about whether the physiology, the thresholds, or the
+    weather reconstruction are right.
+    """
+    if n <= 0:
+        return {"error": "empty ensemble"}
+    k = int(k); n = int(n)
+    if k < 0 or k > n:
+        return {"error": f"invalid count {k} of {n}"}
+    from scipy.stats import beta as _beta
+    lo = 0.0 if k == 0 else float(_beta.ppf(alpha / 2, k, n - k + 1))
+    hi = 1.0 if k == n else float(_beta.ppf(1 - alpha / 2, k + 1, n - k))
+    return {"k": k, "n": n, "point": k / n, "lo": lo, "hi": hi, "alpha": alpha}
+
+
+def format_fraction_interval(res: dict) -> str:
+    """One-line rendering, e.g. '8% (3 of 40; 95% interval 2-21%)'.
+
+    The raw count is shown deliberately: '8%' and '3 of 40' carry the
+    same number but not the same warning.
+    """
+    if "error" in res:
+        return res["error"]
+    pct = int(round((1 - res["alpha"]) * 100))
+    return (f"{res['point']:.0%} ({res['k']} van {res['n']}; "
+            f"{pct}%-interval {res['lo']:.0%}\u2013{res['hi']:.0%})")
+
+
+def fraction_caveats(res: dict, label: str = "criterium") -> list[str]:
+    """Warnings triggered by the count itself, so a reader is told when a
+    number is too thin to lean on without someone remembering to say so."""
+    if "error" in res:
+        return []
+    notes = []
+    k, n, lo, hi = res["k"], res["n"], res["lo"], res["hi"]
+    if k == 0:
+        notes.append(
+            f"Geen enkele run haalde het {label}. Dat betekent niet dat de "
+            f"kans nul is: bij {n} runs is alles tot {hi:.0%} verenigbaar "
+            f"met deze uitkomst.")
+    elif k < 5:
+        notes.append(
+            f"Dit percentage berust op {k} van de {n} runs. Het "
+            f"{int(round((1-res['alpha'])*100))}%-interval loopt van "
+            f"{lo:.0%} tot {hi:.0%} \u2014 breed genoeg om het cijfer alleen "
+            f"als richtingaanwijzer te lezen, niet als schatting.")
+    if k > 0 and hi > 3 * res["point"]:
+        notes.append(
+            f"De bovengrens ({hi:.0%}) is meer dan drie keer de "
+            f"puntschatting ({res['point']:.0%}): verschillen met andere "
+            f"scenario's van deze orde zijn niet te onderscheiden van "
+            f"steekproefruis.")
+    return notes

@@ -583,6 +583,15 @@ def _summarize_results(all_results: list) -> dict:
         # single-person app).
         "pct_true_ehe_criterion": float(100 * np.mean(true_ehe)),
         "pct_true_eac_criterion": float(100 * np.mean(true_eac)),
+        # [phase 1, 2026-08-19] Raw counts alongside the percentages, so
+        # uncertainty.fraction_interval() can show how precise each one
+        # actually is. A criterion percentage resting on two simulated
+        # participants and one resting on two hundred look identical
+        # until the count is shown.
+        "n_true_ehs_hits": int(np.sum(true_ehs)),
+        "n_true_ehe_hits": int(np.sum(true_ehe)),
+        "n_true_eac_hits": int(np.sum(true_eac)),
+        "n_simulations_used": int(len(all_results)),
         "pct_first_aid": float(100 * np.mean(first_aid)),
         "pct_ehs_postfinish": float(100 * np.mean(
             [bool(res[-1].get("ehs_postfinish", False)) for res in all_results])),

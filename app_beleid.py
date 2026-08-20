@@ -522,14 +522,20 @@ if st.session_state.results and selected_levels:
                           f"{_ehs_c*10:.1f} per 1000",
                           help="T_rect\u226540.5\u00b0C AND CO_reserve\u22640 at the same "
                                "timestep, during the race or shortly after.")
+                from uncertainty import (fraction_interval as _fi,
+                                          format_fraction_interval as _ffi,
+                                          fraction_caveats as _fcav)
+                _nsim = result.get("n_simulations_used") or 0
+                _ehe_ci = _fi(result.get("n_true_ehe_hits", 0), _nsim) if _nsim else {"error": ""}
+                _eac_ci = _fi(result.get("n_true_eac_hits", 0), _nsim) if _nsim else {"error": ""}
                 k2.metric("EHE \u2014 exertional heat exhaustion",
-                          f"{(_ehe_c or 0):.1f}% of simulated runners",
+                          _ffi(_ehe_ci) if _nsim else f"{(_ehe_c or 0):.1f}%",
                           help="T_rect>39.5\u00b0C AND CO_reserve<0 at the same "
                                "timestep, during exertion only. Shown as a "
                                "percentage rather than per 1000 \u2014 see the "
                                "explanation below.")
                 k3.metric("EAC \u2014 exercise-associated collapse",
-                          f"{(_eac_c or 0):.1f}% of simulated runners",
+                          _ffi(_eac_ci) if _nsim else f"{(_eac_c or 0):.1f}%",
                           help="A sustained cardiac-output deficit in the 10 "
                                "minutes after finishing. No temperature condition "
                                "\u2014 EAC is cardiovascular, not thermal.")
@@ -591,6 +597,14 @@ if st.session_state.results and selected_levels:
                         "both conditions at the SAME timestep \u2014 a temperature "
                         "peak at 11:00 and a reserve trough at 13:00 do not count."
                     )
+                _fc = (_fcav(_ehe_ci, "EHE-criterium") + _fcav(_eac_ci, "EAC-criterium")) if _nsim else []
+                if _fc:
+                    with st.expander(f"\u26a0\ufe0f Hoe nauwkeurig zijn deze percentages? \u2014 {lvl}"):
+                        for _c in _fc:
+                            st.markdown("- " + _c)
+                        st.caption(
+                            "Dit gaat uitsluitend over het aantal simulaties, niet over "
+                            "de vraag of de fysiologie of de drempels kloppen.")
             if broad_screen is not None:
                 c3.metric(
                     "Worth monitoring (broad screen)", f"{broad_screen:.1f}%",

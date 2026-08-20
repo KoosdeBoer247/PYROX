@@ -1086,8 +1086,17 @@ def _add_race_window_section(doc, level_label, weather_df, exp_start, finish,
         _ehe_c = hestia_result.get("pct_true_ehe_criterion") or 0.0
         _eac_c = hestia_result.get("pct_true_eac_criterion") or 0.0
         _row("EHS criterion met (simulated count)", f"{_ehs_c*10:.1f} per 1000")
-        _row("EHE criterion met (simulated)", f"{_ehe_c:.1f}% of simulated runners")
-        _row("EAC criterion met (simulated)", f"{_eac_c:.1f}% of simulated runners")
+        from uncertainty import (fraction_interval as _fi,
+                                  format_fraction_interval as _ffi)
+        _nsim = hestia_result.get("n_simulations_used") or 0
+        if _nsim:
+            _row("EHE criterion met (simulated)",
+                 _ffi(_fi(hestia_result.get("n_true_ehe_hits", 0), _nsim)))
+            _row("EAC criterion met (simulated)",
+                 _ffi(_fi(hestia_result.get("n_true_eac_hits", 0), _nsim)))
+        else:
+            _row("EHE criterion met (simulated)", f"{_ehe_c:.1f}% of simulated runners")
+            _row("EAC criterion met (simulated)", f"{_eac_c:.1f}% of simulated runners")
     if broad_screen is not None:
         _row("Worth monitoring (broad screen: T_rect\u226540.5\u00b0C OR "
              "dehydration\u22652% OR RPE\u226517)", f"{broad_screen:.1f}%")

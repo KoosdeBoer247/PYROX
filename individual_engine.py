@@ -457,6 +457,11 @@ class IndividualAssessment:
                                         # only -- "how bad is it when it happens"
     eac_fraction: float                # share meeting EAC (CO_reserve<0
                                         # post-finish, no temperature condition)
+    ehs_hits: int                      # [phase 1, 2026-08-19] raw counts kept
+    ehe_hits: int                      # alongside the fractions: '8%' and '3 of
+    eac_hits: int                      # 40' are the same number but not the same
+                                        # warning. uncertainty.fraction_interval()
+                                        # turns these into an exact interval.
     eac_dose_mean: float               # MEAN EAC dose across the whole ensemble
     eac_dose_among_hits: float         # median EAC dose among qualifying members
     ehs_interval: dict                 # from uncertainty.ehs_interval(),
@@ -607,6 +612,9 @@ def run_individual_assessment(
         co_reserve_median=np.array(bands["co_reserve_median"]), co_reserve_lo=np.array(bands["co_reserve_lo"]),
         co_reserve_hi=np.array(bands["co_reserve_hi"]),
         conjunction_fraction=conj_hits / n_ensemble,
+        ehs_hits=conj_hits,
+        ehe_hits=ehe_hits,
+        eac_hits=eac_hits,
         ehe_fraction=ehe_hits / n_ensemble,
         ehe_dose_mean=float(np.mean(ehe_doses)) if ehe_doses else 0.0,
         ehe_dose_among_hits=(float(np.median([d for d in ehe_doses if d > 0]))
@@ -955,4 +963,14 @@ def assessment_caveats(a: IndividualAssessment) -> list[str]:
             f"deepening at a stable temperature, not an imminent threshold "
             f"crossing."
         )
+    # [phase 1, 2026-08-19] Sampling precision of the criterion counts.
+    # Previously this had to be spotted and written out by hand each time
+    # a fraction rested on one or two runs; now the count itself decides.
+    # Measured motivation: the same scenario at n=100, five seeds, gave
+    # 1%, 5%, 4%, 4%, 1% -- a fivefold spread from sampling alone.
+    from uncertainty import fraction_interval, fraction_caveats
+    for hits, label in ((a.ehs_hits, "EHS-criterium"),
+                        (a.ehe_hits, "EHE-criterium"),
+                        (a.eac_hits, "EAC-criterium")):
+        notes.extend(fraction_caveats(fraction_interval(hits, a.n_ensemble), label))
     return notes
