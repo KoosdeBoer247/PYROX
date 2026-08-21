@@ -3,8 +3,8 @@
 An interactive web interface over the Thermopoulos Data Engine (weather
 acquisition and thermal-index processing), PYROX (population-tier
 heat-strain model), and HESTIA (individual-tier cardiovascular Monte Carlo
-model). Four Streamlit front-ends share the same modules — two run on the
-PYROX population tier, two on the HESTIA individual tier:
+model). Five Streamlit front-ends share the same modules — two run on the
+PYROX population tier, three on the HESTIA individual tier:
 
 | App | Entry point | Tier | Audience |
 |---|---|---|---|
@@ -12,6 +12,7 @@ PYROX population tier, two on the HESTIA individual tier:
 | PYROX Participants | `app_athletes.py` | PYROX | Runners and walkers, event organisers — full methodology |
 | PYROX Beleid | `app_beleid.py` | HESTIA | Policymakers/organisers who need one race's headline result, without the research-level caveats |
 | PYROX Persoonlijk | `app_persoonlijk.py` | HESTIA | One named individual's own assessment for one event, run entirely on their own machine (see "Privacy architecture" below) |
+| PYROX Klimaatprojectie | `app_klimaatprojectie.py` | HESTIA | Event organisers weighing whether a fixed yearly date/location stays viable as the climate shifts — year-over-year EHE/EHS projection against the 1996–2025 reference period (see "Klimaathoudbaarheid projection" below) |
 
 PYROX and HESTIA are deliberately separate model architectures, not one
 wrapping the other — `pyrox_model.py`/`pyrox_bridge.py`/`pyrox_groups.py`
@@ -26,8 +27,8 @@ This document covers the **PYROX population-tier scope** in depth (it
 predates the HESTIA integration below and the newer apps, and keeps that
 narrower focus deliberately — see "Why the calibration was revised"). For
 the HESTIA individual tier, the clo/hydration/dose-response fixes, and
-day-to-day usage of all four apps, see `GEBRUIKSAANWIJZING.md`. For
-GitHub/Streamlit deployment of all four apps, see `HANDLEIDING.md`.
+day-to-day usage of all five apps, see `GEBRUIKSAANWIJZING.md`. For
+GitHub/Streamlit deployment of all five apps, see `HANDLEIDING.md`.
 
 ---
 
@@ -72,10 +73,11 @@ roster remains untouched in `pyrox_groups.py` for comparison.
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py               # general app
-streamlit run app_athletes.py      # runners/walkers, full methodology
-streamlit run app_beleid.py        # simplified policy/organiser view
-streamlit run app_persoonlijk.py   # one person's own assessment, local-only
+streamlit run app.py                     # general app
+streamlit run app_athletes.py            # runners/walkers, full methodology
+streamlit run app_beleid.py              # simplified policy/organiser view
+streamlit run app_persoonlijk.py         # one person's own assessment, local-only
+streamlit run app_klimaatprojectie.py    # multi-year climate-shift projection for a fixed event date
 ```
 
 Each opens at `http://localhost:8501` (run one at a time, or on separate
@@ -95,9 +97,10 @@ python3 test_individual_engine.py      # app_persoonlijk.py / individual_engine.
 1. Put this folder in a GitHub repository.
 2. Go to https://share.streamlit.io and sign in with GitHub.
 3. "New app" → select the repository → entry point `app.py`, `app_athletes.py`,
-   `app_beleid.py`, or `app_persoonlijk.py` → Deploy. All four can point at
-   the same repo — one set of modules, four front-ends — so a fix reaches
-   all four at once (within the tier it belongs to; see above).
+   `app_beleid.py`, `app_persoonlijk.py`, or `app_klimaatprojectie.py` →
+   Deploy. All five can point at the same repo — one set of modules, five
+   front-ends — so a fix reaches all five at once (within the tier it
+   belongs to; see above).
 
 See `HANDLEIDING.md` for Python-version pinning and troubleshooting specific
 to Streamlit Community Cloud.
@@ -110,6 +113,7 @@ to Streamlit Community Cloud.
 | `app_athletes.py` | Streamlit interface — runners/walkers, full methodology (PYROX tier) |
 | `app_beleid.py` | Streamlit interface — simplified policy/organiser view (HESTIA tier) |
 | `app_persoonlijk.py` | Streamlit interface — one person's own assessment, local-only (HESTIA tier) |
+| `app_klimaatprojectie.py` | Streamlit interface — year-over-year EHE/EHS projection vs. 1996–2025 for a fixed yearly event date (HESTIA tier) |
 | `Thermopoulos_Data_Engine.py` | Weather acquisition, UHI, MRT, WBGT, UTCI |
 | `thermopoulos_loader.py` | Bridge from weather data to daily heat load |
 | `pyrox_model.py` | PYROX strain dynamics (paper Sec 2.2) |
@@ -387,6 +391,59 @@ hypoperfusion, an upright posture and a moment), so neither has the kind
 of observed-incidence fit that would make a per-1000 rate defensible.
 EAC's Gothenburg anchor is the strongest candidate for a second
 calibration point alongside Falmouth — not yet attempted.
+
+**Klimaathoudbaarheid projection (`app_klimaatprojectie.py`, 2026-08-21).**
+Answers a different question from the other four apps: not "what is the
+risk this year", but "does a fixed yearly event date/location stay
+defensible as the climate shifts" — built for indicative conversations
+with event organisers about whether to move a date, not as a validated
+forecast.
+
+Method, entirely on top of existing modules (no new physiology, no new
+weather source):
+
+1. **Reference period (1996-2025).** For each reference year, one real
+   ERA5 fetch covers the event date ±3 days (`Thermopoulos_Data_Engine.
+   fetch_historical_data` — the same call `app.py`/`app_beleid.py` use),
+   giving up to 210 real historical day-realisations around the date.
+2. **Trend.** A Theil-Sen slope (`scipy.stats.theilslopes`, the same
+   estimator `Klimatos.ClimateShift` uses for its annual maxima) is fit
+   on the mean air temperature **during the actual race window
+   (start→finish)**, averaged over the 7 day-realisations per reference
+   year — not the whole-day mean and not the yearly maximum. Diurnal
+   warming is not uniform (nights often warm faster than afternoons in
+   temperate climates), so a whole-day trend can mis-estimate the
+   warming that applies specifically to the event's own hours.
+3. **Projection.** For each target year, every one of the 210 historical
+   days has its raw rural air temperature shifted by
+   `slope × (target_year − that day's own historical year)`, then the
+   **full** physical chain (UHI → globe temperature → MRT → WBGT/UTCI)
+   is re-derived from the shifted value via `process_weather_data()`, so
+   nothing is shifted in isolation from the rest of the pipeline.
+4. Every (possibly shifted) day-realisation is run through
+   `hestia_bridge.run_quick_estimate()` — the identical population
+   ensemble function `app.py`/`app_beleid.py` call, nothing reimplemented.
+   The mean EHE outcome across the 210 realisations for a given year is
+   its expectation; the fraction of the 210 realisations exceeding a
+   user-set threshold is its exceedance probability. Both are reported
+   for the reference period and for every target year, side by side.
+
+**Deliberate deviation from the EHE/EAC convention above.** The rest of
+this suite reports EHE only as a percentage of the ensemble, never a
+rate per 1000, because it is uncalibrated. This app additionally shows
+an **"EHE per 1000"** figure (the same percentage × 10) at the author's
+explicit request, labelled uncalibrated/indicative everywhere it
+appears, alongside the properly Falmouth-calibrated EHS/1000 from the
+same run for contrast. This is a UI choice for this one app, not a
+change to what EHE means or how it is computed.
+
+Explicit, undisguised limitations (also in the app's own expander,
+every run): the projection is a statistical extrapolation of an
+observed trend estimated specifically over the race-window hours, not
+a physical climate model or a forecast for any one year; only air
+temperature is shifted, humidity/wind/cloud cover are left at their
+historical values for that calendar day; trend stationarity within the
+reference window is an assumption, not tested.
 
 **Privacy architecture (`app_persoonlijk.py`, 2026-08-15/16).** Built for
 one named individual's own biometrics and one event, run entirely on

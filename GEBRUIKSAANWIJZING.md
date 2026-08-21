@@ -4,7 +4,7 @@ Deze handleiding is voor mensen die de app **gebruiken**: organisatoren,
 hulpverleners, coaches, deelnemers. Voor het beheren van de Streamlit/
 GitHub-technische kant is er een aparte handleiding (`HANDLEIDING.md`).
 
-PYROX bestaat uit **vier apps**, en dit document behandelt ze alle vier:
+PYROX bestaat uit **vijf apps**, en dit document behandelt ze alle vijf:
 
 | App | Voor wie |
 |---|---|
@@ -12,6 +12,7 @@ PYROX bestaat uit **vier apps**, en dit document behandelt ze alle vier:
 | **PYROX Participants** | Hardlopers, wandelaars, evenementenorganisatie — volledige methodologie |
 | **PYROX Beleid** | Beleidsmakers/organisatoren die snel het eindresultaat voor één specifieke run willen zien, zonder de onderzoeksmatige onderbouwing eromheen |
 | **PYROX Persoonlijk** | Eén met naam genoemde deelnemer die zijn eigen assessment wil, volledig lokaal op zijn eigen apparaat (zie §3.9) |
+| **PYROX Klimaatprojectie** | Evenementenorganisatoren die willen weten of een vaste jaarlijkse datum/locatie houdbaar blijft naarmate het klimaat opschuift (zie §3.10) |
 
 De derde app, PYROX Beleid, is een sterk vereenvoudigde versie van PYROX
 Participants: dezelfde locatie-, tempo- en sessie-invoer, maar alleen de
@@ -30,6 +31,15 @@ populatie: eigen lengte, gewicht, leeftijd, tempo en gewoontes, in plaats
 van een steekproef. Zie §3.9 voor de privacy-architectuur en het
 belangrijke onderscheid tussen "op je eigen apparaat draaien" en "een
 gedeelde link openen".
+
+De vijfde app, PYROX Klimaatprojectie, beantwoordt een andere vraag dan de
+andere vier: niet "hoe riskant is dit evenement dit jaar", maar "blijft
+een vaste jaarlijkse datum/locatie verantwoord naarmate het klimaat
+opschuift". Hij vergelijkt de referentieperiode 1996–2025 met door jou
+gekozen toekomstige jaren, en toont per jaar zowel de verwachte EHE-uitkomst
+als de kans dat een zelf ingestelde grens wordt overschreden. Zie §3.10
+voor de volledige uitleg, inclusief de belangrijke kanttekening dat EHE
+hier ongekalibreerd blijft.
 
 **Sinds build 2026-08-14a** heeft PYROX Beleid ook een hindcast-modus: in
 de zijbalk kun je "Weather source" op "Historical (hindcast)" zetten en
@@ -295,6 +305,49 @@ definities): **EHS** (gekalibreerd, per 1000, race + herstel), **EHE**
 alle drie en een verklarende sectie is met één knop te downloaden onder
 de resultaten.
 
+### 3.10 PYROX Klimaatprojectie — houdbaarheid van een vaste jaardatum
+
+Deze app beantwoordt een andere vraag dan de vier hiervoor: niet "hoe
+riskant is dit evenement dit jaar", maar "blijft een vaste jaarlijkse
+datum/locatie verantwoord naarmate het klimaat opschuift".
+
+**Wat je invult:** locatie, de kalenderdatum (het jaartal zelf doet er
+niet toe — alleen dag en maand), starttijd, duur, tempo van de mediane
+deelnemer, terreintype, een zelf ingestelde EHE-grens (%), en een reeks
+toekomstige jaren om te vergelijken (bijvoorbeeld 2030 t/m 2050, in
+stappen van 5 jaar).
+
+**Wat de app doet, in het kort** (de volledige methode staat in de
+docstring bovenin `app_klimaatprojectie.py` en in `README.md`):
+
+1. Haalt het echte, waargenomen weer op voor elk jaar 1996–2025, in een
+   venster van jouw datum ±3 dagen — tot 210 historische dagen.
+2. Schat de opwarmingstrend op díe specifieke periode van het jaar (niet
+   de jaarpiek), met dezelfde Theil-Sen-methode als Klimatos.ClimateShift.
+3. Verschuift voor elk gekozen toekomstig jaar diezelfde 210 dagen met die
+   trend, en rekent daarna de volledige fysische keten (stad-warmte-eiland,
+   globe-temperatuur, WBGT/UTCI) opnieuw door — niet los van elkaar.
+4. Laat elke dag door dezelfde HESTIA-populatie-ensemble lopen als
+   PYROX/PYROX Beleid, en middelt het resultaat over de 210 dagen.
+
+**Wat je terugkrijgt, per jaar naast de referentieperiode:**
+- de verwachte EHE-uitkomst (als percentage **én** als "per 1000")
+- de kans dat je ingestelde grens dat jaar wordt overschreden
+- het Falmouth-gekalibreerde EHS/1000 ter vergelijking
+
+**Belangrijke kanttekening, die de app zelf ook op elke pagina toont:**
+EHE is, net als in de andere apps, **niet gekalibreerd** tegen
+waargenomen incidentie. Anders dan in de rest van de suite toont deze
+app EHE tóch als "per 1000" — dat is een bewuste keuze voor dit ene
+instrument, nadrukkelijk gelabeld als indicatief/ongekalibreerd, zodat
+het naast het wél gekalibreerde EHS/1000 herkenbaar blijft wat wel en
+niet op echte incidentie is getoetst. De toekomstprojectie zelf is een
+statistische trendextrapolatie, geen klimaatmodel en geen weersvoorspelling
+voor een specifiek jaar — een individueel jaar kan altijd sterk afwijken.
+
+Bedoeld voor een indicatief gesprek met een organisatie ("moeten we deze
+datum over tien jaar heroverwegen"), niet als eindoordeel op zichzelf.
+
 ---
 
 ## 4. Waarom zeggen twee onderdelen soms iets anders?
@@ -328,6 +381,7 @@ herkennen.
 | Trainingsopbouw richting een hittegolf of wedstrijddag | §3.4 / §3.7 (PYROX) |
 | Sportspecifiek advies op basis van omgevingscondities | §3.5 Sports Medicine Australia/PHS |
 | Globaal, snel overzicht voor een niet-ingewijde | De groene/gele/rode accu-kaarten in §3.4, in de "Simple"-weergave |
+| Blijft een vaste jaardatum houdbaar over 10-20 jaar | §3.10 PYROX Klimaatprojectie (indicatief, ongekalibreerd) |
 
 ---
 

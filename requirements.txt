@@ -21,6 +21,12 @@ xlsxwriter>=3.0
 openpyxl>=3.0
 plotly>=5.20
 
+# app_klimaatprojectie.py uses scipy.stats.theilslopes directly (Theil-Sen
+# trend estimation, same method as Klimatos.ClimateShift). Previously only a
+# transitive dependency via pythermalcomfort; pinned explicitly now that a
+# top-level import exists.
+scipy>=1.7
+
 # rasterio powers the ESA WorldCover per-segment terrain checkbox in the
 # GPX section. Previously left commented out because the app was running on
 # Python 3.14 (Streamlit Community Cloud's then-default), where rasterio and

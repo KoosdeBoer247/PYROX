@@ -53,23 +53,26 @@ paragraaf 3.6 voor de volledige uitleg.
 
 ## 1. De opzet in één alinea
 
-Eén GitHub-repository bevat alle bestanden. Streamlit draait daar **vier
+Eén GitHub-repository bevat alle bestanden. Streamlit draait daar **vijf
 apps** uit, die verschillen in welk bestand het startpunt is en welke
 modelmotor eronder zit (zie `README.md`: PYROX-tier vs. HESTIA-tier).
 Binnen elke tier worden modellen en rekenmodules gedeeld. Een correctie in
 bijvoorbeeld `decision_support.py` werkt daardoor meteen door in de drie
 apps die het gebruiken (`app.py`, `app_athletes.py`, `app_beleid.py`) —
-`app_persoonlijk.py` heeft zijn eigen, kleinere module­set
-(`individual_engine.py`, `individual_report.py`, `local_storage.py`,
-`uncertainty.py`) en importeert `decision_support.py` niet. Dat is met
-opzet zo: meerdere kopieën van dezelfde logica lopen na verloop van tijd
-altijd uit elkaar, en niets waarschuwt je daarvoor.
+`app_persoonlijk.py` en `app_klimaatprojectie.py` hebben elk hun eigen,
+kleinere module­set (`individual_engine.py`/`individual_report.py`/
+`local_storage.py`/`uncertainty.py` respectievelijk niets extra's buiten
+`hestia_bridge.py`/`Thermopoulos_Data_Engine.py`) en importeren
+`decision_support.py` niet. Dat is met opzet zo: meerdere kopieën van
+dezelfde logica lopen na verloop van tijd altijd uit elkaar, en niets
+waarschuwt je daarvoor.
 
 | App | Startbestand | Voor wie |
 |---|---|---|
 | PYROX (algemeen) | `app.py` | bevolkingsgroepen, beroepsgroepen, beleid — volledige onderzoeksinterface |
 | PYROX Participants | `app_athletes.py` | hardlopers en wandelaars, evenementenorganisatie — volledige methodologie zichtbaar |
 | PYROX Beleid | `app_beleid.py` | beleidsmakers/organisatoren die alleen het eindresultaat voor één specifieke run nodig hebben — sterk vereenvoudigd, PROVISIONAL-kanttekeningen en ruwe HESTIA-cijfers bewust weggelaten |
+| PYROX Klimaatprojectie | `app_klimaatprojectie.py` | evenementenorganisatoren die willen weten of een vaste jaarlijkse datum/locatie houdbaar blijft naarmate het klimaat opschuift — verwachtingswaarde + overschrijdingskans per toekomstig jaar, naast de referentieperiode 1996–2025 |
 
 `app_beleid.py` deelt dezelfde zijbalk en tempo/sessie-invoer als
 `app_athletes.py`, maar toont in het hoofdscherm alleen: weersomstandigheden,
@@ -90,6 +93,7 @@ de docstring bovenin het bestand.
 | `app.py` | De algemene app: layout, zijbalk, alle schermonderdelen |
 | `app_athletes.py` | De deelnemersapp: niveaus, tempo, wedstrijdvlaggen |
 | `app_beleid.py` | De beleidsapp: subset van `app_athletes.py`'s invoer, sterk vereenvoudigde uitvoer |
+| `app_klimaatprojectie.py` | De klimaathoudbaarheids-app: referentieperiode 1996–2025 vs. Theil-Sen-geprojecteerde toekomstjaren, EHE-verwachtingswaarde + overschrijdingskans |
 
 ### Applicatiemodules (gedeeld door `app.py` / `app_athletes.py` / `app_beleid.py`)
 
@@ -105,6 +109,16 @@ module­set (`individual_engine.py`, `individual_report.py`,
 gedeeld met `app_beleid.py`: de kernmotor (`hestia_model.py`,
 `HESTIA_CVR_Module_v2.py`, `hestia_bridge.py`) — zie `README.md`'s
 bestandenlijst voor het volledige overzicht.
+
+`app_klimaatprojectie.py` deelt evenmin deze drie — geen `pyrox_bridge.py`
+(behalve `met_from_pace`/`acsm_range_warning` voor de tempo-invoer),
+`decision_support.py` of `loop_view.py`. Wel gedeeld: `hestia_bridge.py`
+(`run_quick_estimate`, exact dezelfde functie als `app.py`/`app_beleid.py`
+gebruiken) en `Thermopoulos_Data_Engine.py` (weerdata + volledige
+fysische keten). Geen enkel bestand is uniek voor deze app op
+modelniveau — alleen het Theil-Sen-trendmechanisme en de
+jaar-voor-jaar-vergelijking zitten uitsluitend in `app_klimaatprojectie.py`
+zelf.
 | `plain_view.py` | Accu-kaarten en tijdlijn voor niet-ingewijden |
 | `evidence.py` | Onderbouwing per claim, inclusief wat *niet* is aangetoond |
 | `gpx_route.py` | GPX inlezen, tempo/blootstelling langs de route, kaartje |
@@ -174,7 +188,7 @@ in plaats van de inhoud. Verwijder alles en doe het opnieuw.
 
 ---
 
-## 4. Streamlit: de vier apps
+## 4. Streamlit: de vijf apps
 
 ### ⚠️ EERST: kies Python 3.12
 
@@ -218,10 +232,10 @@ Repository: je PYROX-repo · Branch: `main` · **Main file path: `app.py`**
 ### De derde app aanmaken (beleidsweergave)
 
 Zelfde procedure, met **Main file path: `app_beleid.py`**. Ook deze
-deployment wijst naar dezelfde repo — één set modules, vier front-ends, dus
-een fix in bijvoorbeeld `hestia_bridge.py` bereikt zowel deze als de vierde
-app tegelijk. Kies een URL die het onderscheid met de andere apps duidelijk
-maakt, bijvoorbeeld `pyrox-beleid`.
+deployment wijst naar dezelfde repo — één set modules, vijf front-ends, dus
+een fix in bijvoorbeeld `hestia_bridge.py` bereikt deze, de vierde én de
+vijfde app tegelijk. Kies een URL die het onderscheid met de andere apps
+duidelijk maakt, bijvoorbeeld `pyrox-beleid`.
 
 ### De vierde app aanmaken (persoonlijke weergave)
 
@@ -239,6 +253,21 @@ het proces zelf draait — bij een gedeelde Streamlit Cloud-link is dat deze
 deployment, niet de bezoeker. Zie `GEBRUIKSAANWIJZING.md` §3.9 en
 `README.md`'s privacy-architectuur-paragraaf voor de volledige uitleg
 voordat je deze URL doorstuurt.
+
+### De vijfde app aanmaken (klimaatprojectie)
+
+Zelfde procedure, met **Main file path: `app_klimaatprojectie.py`**. Deze
+app draait op `hestia_bridge.run_quick_estimate()` — dezelfde functie als
+`app.py`/`app_beleid.py` — plus `Thermopoulos_Data_Engine.py` voor de
+weerdata, dus een fix in een van die twee bereikt deze app automatisch mee.
+Kies een herkenbare URL, bijvoorbeeld `pyrox-klimaatprojectie`.
+
+**Let op de rekentijd bij het testen.** Deze app haalt bij elke nieuwe
+locatie/datum-combinatie tot 30 losse historische jaren op (referentie
+1996–2025) en rekent daarna per doeljaar nog eens diezelfde 210
+dag-realisaties door de HESTIA-ensemble — dat kan enkele minuten duren bij
+de eerste run. Herhaalde runs met dezelfde instellingen zijn 6 uur gecacht
+(`st.cache_data`, zie `DEPLOY.md`'s API-quotasectie).
 
 ### Na elke upload
 
@@ -258,9 +287,10 @@ Onderin de zijbalk staat:
 ```
 Build 2026-08-12a (...)   ← app.py / app_athletes.py
 Build 2026-08-17a (...)   ← app_beleid.py / app_persoonlijk.py
+Build 2026-08-21a (...)   ← app_klimaatprojectie.py
 ```
 
-De vier apps hebben elk hun **eigen** `APP_BUILD`-stempel — dat is normaal,
+De vijf apps hebben elk hun **eigen** `APP_BUILD`-stempel — dat is normaal,
 zolang elke stempel maar hoort bij de laatste wijziging in dát bestand. Het
 gaat mis als een stempel *lager* is dan je verwacht op basis van een recente
 wijziging: dan is dat specifieke bestand niet meegekomen bij het uploaden.

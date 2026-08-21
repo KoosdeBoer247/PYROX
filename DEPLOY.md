@@ -1,9 +1,9 @@
 # PYROX app — file inventory and deployment
 
-Complete, verified set for the PYROX Streamlit apps, as of 17 August 2026.
+Complete, verified set for the PYROX Streamlit apps, as of 21 August 2026.
 Everything in this folder goes in the **root** of the GitHub repo
 (`KoosdeBoer247/PYROX`) — no subfolders. Verified from a clean directory:
-all modules compile, all acceptance tests pass, and all four apps boot
+all modules compile, all acceptance tests pass, and all five apps boot
 without errors. This is the short version of `HANDLEIDING.md` — see that
 file for full troubleshooting detail.
 
@@ -15,8 +15,9 @@ file for full troubleshooting detail.
 | `app_athletes.py` | **Athlete app** (PYROX tier, beginner→elite) — main file for deployment 2 | Yes, entry point 2 |
 | `app_beleid.py` | **Simplified policy/organiser view** (HESTIA tier) — main file for deployment 3 | Yes, entry point 3 |
 | `app_persoonlijk.py` | **One person's own assessment, local-only** (HESTIA tier) — main file for deployment 4 | Yes, entry point 4 |
-| `pyrox_bridge.py` | Shared PYROX execution + pace→MET conversion, used by `app.py`/`app_athletes.py` | App-layer |
-| `hestia_bridge.py` | HESTIA quick-estimate / full-precision entry points, caching, used by `app_beleid.py`/`app_athletes.py` | App-layer |
+| `app_klimaatprojectie.py` | **Klimaathoudbaarheid van een jaarlijks evenement** (year-over-year EHE/EHS projection vs. 1996–2025) — main file for deployment 5 | Yes, entry point 5 |
+| `pyrox_bridge.py` | Shared PYROX execution + pace→MET conversion, used by `app.py`/`app_athletes.py`/`app_klimaatprojectie.py` | App-layer |
+| `hestia_bridge.py` | HESTIA quick-estimate / full-precision entry points, caching, used by `app_beleid.py`/`app_athletes.py`/`app_klimaatprojectie.py` | App-layer |
 | `individual_engine.py` | One-person HESTIA wrapper for `app_persoonlijk.py` — personal ensemble, EHE/EAC criteria | App-layer |
 | `individual_report.py` | Word-report generator for `app_persoonlijk.py` | App-layer |
 | `local_storage.py` | Local-only (no network) persistence for `app_persoonlijk.py` | App-layer |
@@ -40,6 +41,11 @@ file for full troubleshooting detail.
 | `test_individual_engine.py` | Regression tests for `individual_engine.py` / `app_persoonlijk.py` | Run after any change touching the personal app |
 | `README.md` | Scientific scope and validation status | Update when scope changes |
 
+`app_klimaatprojectie.py` adds no new core-model file — it reuses
+`hestia_bridge.run_quick_estimate()` and `Thermopoulos_Data_Engine.py`
+exactly as `app.py`/`app_beleid.py` do, plus a self-contained Theil-Sen
+trend estimator (`scipy.stats.theilslopes`, added to `requirements.txt`).
+
 The nine "keep in sync" files are byte-identical to the HESTIA-PYROX
 suite, with one exception: `hestia_model.py` carries two small, documented
 deviations (a defensive `timezonefinder` import, a cached `get_air_quality`)
@@ -60,10 +66,11 @@ research code.
 2. Streamlit Cloud auto-redeploys on commit. If not: Manage app → Reboot.
 3. Main file path: `app.py` for the general app, `app_athletes.py` for the
    athlete app, `app_beleid.py` for the simplified policy view,
-   `app_persoonlijk.py` for the one-person local assessment. All four
-   deployments can point at this same repo — one set of modules, four
-   front-ends, so a fix reaches all four at once (within the tier it
-   belongs to — see `README.md`'s PYROX/HESTIA split).
+   `app_persoonlijk.py` for the one-person local assessment,
+   `app_klimaatprojectie.py` for the multi-year climate-shift projection.
+   All five deployments can point at this same repo — one set of
+   modules, five front-ends, so a fix reaches all five at once (within
+   the tier it belongs to — see `README.md`'s PYROX/HESTIA split).
 4. **Advanced settings → Python version: 3.12** for every deployment — this
    cannot be changed after the app is created. See `HANDLEIDING.md` §4 for
    why.
@@ -89,6 +96,12 @@ geocoding 30 days, forecasts 2 hours, historical ERA5 7 days, climatology
 
 The 30-year climatology option is by far the most expensive feature (one
 request per year of history) — leave it off while testing.
+
+`app_klimaatprojectie.py` is the heaviest single run in the whole suite:
+one historical fetch per reference year (1996–2025, ~30 calls), cached
+6 hours per (location, date, terrain) combination via `st.cache_data`.
+Re-running the same event configuration within that window costs no
+extra quota; changing the location or date starts a fresh 30-call fetch.
 
 ## Known limitations, deliberately kept visible in the UI
 
@@ -125,3 +138,12 @@ request per year of history) — leave it off while testing.
 - UTCI is **not** terrain-adjusted (it is defined at a fixed 10m reference
   wind); only WBGT and MRT vary by land cover.
 - GPX timestamps are ignored; pace comes from the values entered in the UI.
+- **`app_klimaatprojectie.py`'s future-year EHE/1000 figures are doubly
+  indicative**: EHE itself is uncalibrated (see above), and the
+  climate-shift projection is a Theil-Sen statistical extrapolation of
+  the observed 1996–2025 trend, not a physical climate model or a
+  weather forecast for a specific year. It shifts air temperature only —
+  humidity, wind and cloud cover are left at their historical values for
+  that calendar day. Built for indicative conversations with event
+  organisers, not as a validated forecast; the in-app expander states
+  this every time it is run.
