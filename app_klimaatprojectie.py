@@ -37,13 +37,20 @@ METHODE
    als de rest van de suite). Het gemiddelde over de 210 realisaties is
    de VERWACHTINGSWAARDE voor dat jaar; het aandeel realisaties dat de
    zelf ingestelde grens overschrijdt is de OVERSCHRIJDINGSKANS.
-4. Drie aanvullende plots, analoog aan Klimatos.ClimateShift maar op deze
-   pagina's eigen race-venster-gemiddelde T_air-reeks: een trendplot met
-   toekomstprojectie (analoog `plot_timeseries_trend`/
-   `add_trend_projection`), een verdelingsverschuiving referentie vs.
-   doeljaar (analoog `plot_window_normals`) en een return-period-plot met
-   zowel Normaal- als GEV-fit (analoog `plot_return_levels`, met dezelfde
-   n\u224830-instabiliteitskanttekening bij de GEV-staart).
+4. Kernboodschap-plots, los van EHE: een trendplot met toekomstprojectie
+   (analoog Klimatos.ClimateShift's `plot_timeseries_trend`/
+   `add_trend_projection`) en een verwachte-klimaatverandering-plot die
+   de projecteerde T_air- en WBGT-stijging zelf toont (\u00b0C t.o.v. de
+   referentieperiode) -- de fysieke driver onder elk EHE/EHS-cijfer.
+5. EHE-resultaten worden als KWALITATIEVE BAND getoond (bijv. "licht
+   toegenomen risico"), niet als precieze verwachtingswaarde, om te
+   voorkomen dat een trend-geëxtrapoleerd, ongekalibreerd cijfer meer
+   precisie suggereert dan de onderliggende aanname waarmaakt. Exacte
+   cijfers blijven beschikbaar in een uitklapbaar paneel. Aanvullend: een
+   verdelingsverschuiving referentie vs. doeljaar (analoog
+   `plot_window_normals`) en de terugkeertijd in edities (1/kans op
+   overschrijding van de EHE-grens) in plaats van een losse, arbitraire
+   temperatuurdrempel.
 
 BEPERKINGEN (bewust zichtbaar, niet verstopt)
 -----------------------------------------------
@@ -77,7 +84,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from scipy import stats as _stats
-from scipy.stats import genextreme as _genextreme, norm as _norm
+from scipy.stats import norm as _norm
 
 from Thermopoulos_Data_Engine import (
     ROUGHNESS_Z0_TERRAIN,
@@ -158,6 +165,21 @@ def _shift_and_reprocess(raw_df: pd.DataFrame, delta_temp: float, city: dict,
 # =============================================================================
 # Trend: Theil-Sen op de dag-venster-gemiddelde T_air per referentiejaar
 # =============================================================================
+def _race_window_mean_col(df: pd.DataFrame, col: str, event_date: pd.Timestamp, tz: str,
+                          start_time, duration_minutes: float) -> float | None:
+    """Mean of an arbitrary weather column during the ACTUAL race window
+    (start->finish) on one calendar day. Generalises _race_window_mean_temp
+    to also pull WBGT/UTCI for the 'expected climate change' plots, without
+    a second pass over the data."""
+    start_naive = pd.Timestamp.combine(event_date.date(), start_time)
+    start_aware = start_naive.tz_localize(tz, nonexistent="shift_forward", ambiguous=True)
+    finish_aware = start_aware + pd.Timedelta(minutes=duration_minutes)
+    window = df.loc[(df.index >= start_aware) & (df.index <= finish_aware), col]
+    if window.empty:
+        return None
+    return float(window.mean())
+
+
 def _race_window_mean_temp(df: pd.DataFrame, event_date: pd.Timestamp, tz: str,
                            start_time, duration_minutes: float) -> float | None:
     """Mean T_air_rural during the ACTUAL race window (start->finish) on one
@@ -166,13 +188,7 @@ def _race_window_mean_temp(df: pd.DataFrame, event_date: pd.Timestamp, tz: str,
     often warm faster than afternoons in temperate climates), so a
     whole-day trend can mis-estimate the warming that applies specifically
     to the event's own hours."""
-    start_naive = pd.Timestamp.combine(event_date.date(), start_time)
-    start_aware = start_naive.tz_localize(tz, nonexistent="shift_forward", ambiguous=True)
-    finish_aware = start_aware + pd.Timedelta(minutes=duration_minutes)
-    window = df.loc[(df.index >= start_aware) & (df.index <= finish_aware), "T_air_rural"]
-    if window.empty:
-        return None
-    return float(window.mean())
+    return _race_window_mean_col(df, "T_air_rural", event_date, tz, start_time, duration_minutes)
 
 
 def _theil_sen_trend(year_mean_temps: dict[int, float]) -> dict:
@@ -209,33 +225,87 @@ def _shifted_year_series(year_mean_temps: dict[int, float], trend: dict,
     return vals + trend["slope"] * (target_year - years)
 
 
-def _return_period_normal(data: np.ndarray, threshold: float) -> float:
-    """Return period [years] via a Normal fit -- same construction as
-    Klimatos.ClimateShift's _return_period(), just inlined here since this
-    module fits its own (smaller, race-window-specific) series rather than
-    importing the Klimatos script directly."""
-    if len(data) < 4:
-        return float("inf")
-    mu, sigma = float(np.mean(data)), float(np.std(data, ddof=1))
-    if sigma <= 0:
-        return float("inf")
-    prob = float(_norm.sf(threshold, loc=mu, scale=sigma))
-    return 1.0 / prob if prob > 0 else float("inf")
+def _ehe_risk_band(target_ehe_fraction: float, reference_ehe_fraction: float) -> tuple[str, str]:
+    """Qualitative band instead of a precise point estimate for the
+    headline message -- see the conversation with the author: a table of
+    exact 'EHE per 1000' numbers reads as more authoritative than an
+    uncalibrated, trend-extrapolated figure should. Bands are a design
+    choice (ratio target/reference), not a validated classification --
+    exact numbers remain available in the expander below for whoever
+    wants them."""
+    eps = 1e-6
+    ratio = target_ehe_fraction / max(reference_ehe_fraction, eps)
+    if ratio < 1.3:
+        return "Vergelijkbaar met verleden", "#2ca02c"
+    elif ratio < 2.0:
+        return "Licht toegenomen risico", "#bcbd22"
+    elif ratio < 4.0:
+        return "Duidelijk toegenomen risico", "#ff7f0e"
+    else:
+        return "Sterk toegenomen risico", "#d62728"
 
 
-def _return_period_gev(data: np.ndarray, threshold: float) -> float:
-    """Return period [years] via a GEV fit. Same caveat as Klimatos'
-    plot_return_levels(): a 3-parameter GEV fit on ~30 points is
-    genuinely unstable -- shown alongside the Normal fit as a second
-    reference point, not as the more trustworthy of the two."""
-    if len(data) < 8:
-        return float("inf")
-    try:
-        c, loc, scale = _genextreme.fit(data)
-        prob = float(_genextreme.sf(threshold, c, loc=loc, scale=scale))
-        return 1.0 / prob if prob > 0 else float("inf")
-    except Exception:
-        return float("inf")
+def _build_climate_change_plot(reference_temp: float, reference_wbgt: float,
+                               year_mean_temps: dict[int, float], trend: dict,
+                               target_years: list[int],
+                               proj_wbgt_vals: dict[int, list[float]]) -> go.Figure:
+    """The plain climate-change signal itself, separate from any health
+    outcome: projected temperature and WBGT increase per target year vs.
+    the reference period, in degrees -- the physical driver underneath
+    every EHE/EHS number on this page."""
+    years_lbl = [str(y) for y in target_years if y in proj_wbgt_vals and proj_wbgt_vals[y]]
+    delta_temp = []
+    delta_wbgt = []
+    for y in target_years:
+        if y not in proj_wbgt_vals or not proj_wbgt_vals[y]:
+            continue
+        tgt_temp = float(np.mean(_shifted_year_series(year_mean_temps, trend, y)))
+        delta_temp.append(tgt_temp - reference_temp)
+        delta_wbgt.append(float(np.mean(proj_wbgt_vals[y])) - reference_wbgt)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(x=years_lbl, y=delta_temp, name="\u0394 T_air (\u00b0C)",
+                         marker_color="steelblue"))
+    fig.add_trace(go.Bar(x=years_lbl, y=delta_wbgt, name="\u0394 WBGT (\u00b0C)",
+                         marker_color="firebrick"))
+    fig.update_layout(
+        title="Verwachte klimaatverandering t.o.v. referentieperiode "
+              f"({REFERENCE_START_YEAR}-{REFERENCE_END_YEAR}), tijdens het race-venster",
+        xaxis_title="Doeljaar", yaxis_title="Verschil t.o.v. referentie (\u00b0C)",
+        barmode="group", legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=420,
+    )
+    return fig
+
+
+def _build_edition_return_time_plot(reference_outcome: "YearOutcome",
+                                    year_outcomes: dict, target_years: list[int]) -> go.Figure:
+    """Terugkeertijd IN EDITIES i.e. 1/kans-op-overschrijding van de
+    ingestelde EHE-grens -- direct gekoppeld aan de grens die de
+    organisatie zelf instelt, in plaats van een losse, arbitraire
+    drempeltemperatuur zoals de eerdere return-period/GEV-plot. Vervangt
+    die plot na overleg: dezelfde 'hoe vaak zou dit misgaan'-vraag, maar
+    zonder een tweede drempel of een bij n\u224830 instabiele GEV-staart."""
+    def _rt(p: float) -> float:
+        return 1.0 / p if p > 0 else float("inf")
+
+    years_lbl = ["Referentie"] + [str(y) for y in target_years if y in year_outcomes]
+    rts = [_rt(reference_outcome.p_exceeds_threshold)] + [
+        _rt(year_outcomes[y].p_exceeds_threshold) for y in target_years if y in year_outcomes]
+    # inf niet plotbaar -- cap op 10x de langste eindige waarde zodat de balk
+    # zichtbaar 'buiten beeld' loopt in plaats van de as te laten crashen.
+    finite = [v for v in rts if np.isfinite(v)]
+    cap = max(finite) * 10 if finite else 1000.0
+    rts_capped = [min(v, cap) if np.isfinite(v) else cap for v in rts]
+    labels = [f"{v:.0f}" if np.isfinite(v) else f">{cap:.0f}" for v in rts]
+    fig = go.Figure(go.Bar(x=years_lbl, y=rts_capped, text=labels, textposition="outside",
+                          marker_color=["grey"] + ["firebrick"] * (len(years_lbl) - 1)))
+    fig.update_layout(
+        title="Terugkeertijd in edities (1 / kans op overschrijding van je EHE-grens)",
+        xaxis_title="Periode / doeljaar", yaxis_title="Terugkeertijd (edities)",
+        yaxis_type="log", height=420,
+    )
+    return fig
+
 
 
 def _build_trend_plot(year_mean_temps: dict[int, float], trend: dict,
@@ -308,41 +378,6 @@ def _build_distribution_plot(year_mean_temps: dict[int, float], trend: dict,
         legend=dict(orientation="h", yanchor="bottom", y=1.02), height=420,
     )
     return fig
-
-
-def _build_return_period_plot(year_mean_temps: dict[int, float], trend: dict,
-                              target_year: int, threshold_temp: float) -> go.Figure:
-    """Return period vs. threshold temperature, reference vs. target year,
-    Normal fit (solid, robust at n=30) and GEV fit (dashed, same caveat as
-    Klimatos.ClimateShift's plot_return_levels() -- shown as a second
-    reference point, not the more trustworthy of the two)."""
-    ref_vals = np.array(list(year_mean_temps.values()))
-    tgt_vals = _shifted_year_series(year_mean_temps, trend, target_year)
-    lo = min(ref_vals.min(), tgt_vals.min())
-    hi = max(ref_vals.max(), tgt_vals.max()) + 3
-    thresholds = np.linspace(lo, hi, 60)
-    fig = go.Figure()
-    for label, vals, color in [
-        (f"Referentie {REFERENCE_START_YEAR}-{REFERENCE_END_YEAR}", ref_vals, "steelblue"),
-        (f"Geprojecteerd {target_year}", tgt_vals, "firebrick"),
-    ]:
-        rp_normal = [_return_period_normal(vals, t) for t in thresholds]
-        rp_gev = [_return_period_gev(vals, t) for t in thresholds]
-        fig.add_trace(go.Scatter(x=thresholds, y=rp_normal, mode="lines",
-                                 name=f"{label} (Normaal)", line=dict(color=color)))
-        fig.add_trace(go.Scatter(x=thresholds, y=rp_gev, mode="lines",
-                                 name=f"{label} (GEV)",
-                                 line=dict(color=color, dash="dot")))
-    fig.add_vline(x=threshold_temp, line_dash="dash", line_color="grey",
-                 annotation_text="Gekozen drempel")
-    fig.update_layout(
-        title="Return period vs. drempeltemperatuur, referentie vs. doeljaar",
-        xaxis_title="Drempeltemperatuur (\u00b0C, race-venster-gemiddelde)",
-        yaxis_title="Terugkeertijd (jaar)", yaxis_type="log",
-        legend=dict(orientation="h", yanchor="bottom", y=1.02), height=420,
-    )
-    return fig
-
 
 
 def _run_one_day(weather_df: pd.DataFrame, lat: float, lon: float, tz: str,
@@ -515,6 +550,7 @@ st.caption(
 progress = st.progress(0.0, text="Referentieperiode: fysiologische simulatie\u2026")
 offsets = list(range(-DAY_WINDOW, DAY_WINDOW + 1))
 ref_results = []
+ref_wbgt_vals: list[float] = []
 total_steps = len(raw_weather_by_year) * len(offsets)
 step = 0
 for y, df in raw_weather_by_year.items():
@@ -529,6 +565,9 @@ for y, df in raw_weather_by_year.items():
                            met_value, clo_value=0.2, n_simulations=n_simulations,
                            random_seed=42 + off)
         ref_results.append(res)
+        w = _race_window_mean_col(df, "WBGT", event_date, tz, start_time, duration_minutes)
+        if w is not None:
+            ref_wbgt_vals.append(w)
         step += 1
         if step % 10 == 0 or step == total_steps:
             progress.progress(step / total_steps,
@@ -542,10 +581,12 @@ if reference_outcome is None:
 # --- 4. Voor elk doeljaar: dezelfde dagen, klimaat-verschoven ---------------
 progress = st.progress(0.0, text="Toekomstprojectie\u2026")
 year_outcomes: dict[int, YearOutcome] = {}
+proj_wbgt_vals: dict[int, list[float]] = {}
 total_steps = len(target_years) * len(raw_weather_by_year) * len(offsets)
 step = 0
 for target_year in target_years:
     proj_results = []
+    proj_wbgt_vals[target_year] = []
     for y, raw_df in raw_weather_by_year.items():
         delta_temp = trend["slope"] * (target_year - y)
         # Re-fetch coastal_active is not stored on the processed df; recompute
@@ -568,6 +609,9 @@ for target_year in target_years:
                                met_value, clo_value=0.2, n_simulations=n_simulations,
                                random_seed=42 + off)
             proj_results.append(res)
+            w = _race_window_mean_col(proc, "WBGT", event_date, tz, start_time, duration_minutes)
+            if w is not None:
+                proj_wbgt_vals[target_year].append(w)
             step += 1
         if step % 20 == 0 or step == total_steps:
             progress.progress(min(step / total_steps, 1.0),
@@ -585,6 +629,15 @@ progress.empty()
 st.divider()
 st.markdown("## Resultaten")
 
+# =============================================================================
+# Resultaten
+# =============================================================================
+st.divider()
+st.markdown("## Resultaten")
+
+reference_temp_mean = float(np.mean(list(year_mean_temp.values())))
+reference_wbgt_mean = float(np.mean(ref_wbgt_vals)) if ref_wbgt_vals else float("nan")
+
 st.markdown(
     f"### Referentieperiode {REFERENCE_START_YEAR}-{REFERENCE_END_YEAR}\n"
     f"- Verwachte EHE-fractie: **{reference_outcome.ehe_fraction_mean * 100:.1f}%** "
@@ -596,75 +649,88 @@ st.markdown(
     f"**{reference_outcome.ehs_per_1000_falmouth_mean:.2f} per 1000**"
 )
 
+st.markdown("### Kernboodschap: de verwachte klimaatverandering zelf")
+st.caption(
+    "Dit is wat er werkelijk onzeker en werkelijk relevant is, los van EHE: hoeveel "
+    "warmer wordt het naar verwachting tijdens dit evenement, en hoe onzeker is die "
+    "trend zelf? Alle EHE/EHS-cijfers verderop volgen hieruit."
+)
+st.plotly_chart(_build_trend_plot(year_mean_temp, trend, target_years), use_container_width=True)
+if any(proj_wbgt_vals.get(y) for y in target_years):
+    st.plotly_chart(
+        _build_climate_change_plot(reference_temp_mean, reference_wbgt_mean,
+                                   year_mean_temp, trend, target_years, proj_wbgt_vals),
+        use_container_width=True)
+
 if year_outcomes:
-    rows = []
+    st.markdown("### Verwacht EHE-risico per doeljaar (kwalitatief)")
+    st.caption(
+        "Categorieën, geen precieze getallen -- zie hieronder waarom. De exacte "
+        "cijfers staan in de uitklapbare tabel eronder voor wie ze nodig heeft."
+    )
+    band_rows = []
     for ty in target_years:
         if ty not in year_outcomes:
             continue
         o = year_outcomes[ty]
-        rows.append({
-            "Jaar": ty,
-            "Verwachte EHE-fractie (%)": round(o.ehe_fraction_mean * 100, 1),
-            "EHE per 1000 (ongekalibreerd)": round(o.ehe_per_1000_mean, 0),
-            f"Kans op overschrijding grens ({threshold_pct:.1f}%)": round(o.p_exceeds_threshold * 100, 0),
-            "EHS per 1000 (Falmouth-gekalibreerd)": round(o.ehs_per_1000_falmouth_mean, 2),
-        })
-    df_out = pd.DataFrame(rows).set_index("Jaar")
-    st.dataframe(df_out, use_container_width=True)
+        band, _ = _ehe_risk_band(o.ehe_fraction_mean, reference_outcome.ehe_fraction_mean)
+        band_rows.append({"Jaar": ty, "Verwacht EHE-risico t.o.v. referentie": band})
+    st.dataframe(pd.DataFrame(band_rows).set_index("Jaar"), use_container_width=True)
 
-    fig = go.Figure()
-    years_plot = [REFERENCE_START_YEAR + (REFERENCE_END_YEAR - REFERENCE_START_YEAR) // 2] + target_years
-    ehe_vals = [reference_outcome.ehe_fraction_mean * 100] + [
-        year_outcomes[y].ehe_fraction_mean * 100 for y in target_years if y in year_outcomes]
-    p_exceed_vals = [reference_outcome.p_exceeds_threshold * 100] + [
-        year_outcomes[y].p_exceeds_threshold * 100 for y in target_years if y in year_outcomes]
+    with st.expander("Exacte cijfers (voor wie ze nodig heeft)"):
+        st.caption(
+            "Deze getallen ogen preciezer dan de onderliggende aanname (een lineair "
+            "doorgetrokken trend) waarmaakt -- gebruik ze met dat voorbehoud."
+        )
+        rows = []
+        for ty in target_years:
+            if ty not in year_outcomes:
+                continue
+            o = year_outcomes[ty]
+            rows.append({
+                "Jaar": ty,
+                "Verwachte EHE-fractie (%)": round(o.ehe_fraction_mean * 100, 1),
+                "EHE per 1000 (ongekalibreerd)": round(o.ehe_per_1000_mean, 0),
+                f"Kans op overschrijding grens ({threshold_pct:.1f}%)": round(o.p_exceeds_threshold * 100, 0),
+                "EHS per 1000 (Falmouth-gekalibreerd)": round(o.ehs_per_1000_falmouth_mean, 2),
+            })
+        df_out = pd.DataFrame(rows).set_index("Jaar")
+        st.dataframe(df_out, use_container_width=True)
 
-    fig.add_trace(go.Scatter(x=years_plot, y=ehe_vals, mode="lines+markers",
-                             name="Verwachte EHE-fractie (%)"))
-    fig.add_trace(go.Scatter(x=years_plot, y=p_exceed_vals, mode="lines+markers",
-                             name=f"Kans op overschrijding grens ({threshold_pct:.1f}%)",
-                             yaxis="y2"))
-    fig.add_hline(y=reference_outcome.ehe_fraction_mean * 100, line_dash="dot",
-                 annotation_text="Referentieperiode (verwachtingswaarde)", line_color="grey")
-    fig.update_layout(
-        title="EHE-projectie t.o.v. referentieperiode (indicatief, ongekalibreerd)",
-        xaxis_title="Jaar (referentiepunt = midden van 1996-2025)",
-        yaxis=dict(title="Verwachte EHE-fractie (%)"),
-        yaxis2=dict(title="Overschrijdingskans (%)", overlaying="y", side="right"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        height=450,
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        fig = go.Figure()
+        years_plot = [REFERENCE_START_YEAR + (REFERENCE_END_YEAR - REFERENCE_START_YEAR) // 2] + target_years
+        ehe_vals = [reference_outcome.ehe_fraction_mean * 100] + [
+            year_outcomes[y].ehe_fraction_mean * 100 for y in target_years if y in year_outcomes]
+        p_exceed_vals = [reference_outcome.p_exceeds_threshold * 100] + [
+            year_outcomes[y].p_exceeds_threshold * 100 for y in target_years if y in year_outcomes]
+        fig.add_trace(go.Scatter(x=years_plot, y=ehe_vals, mode="lines+markers",
+                                 name="Verwachte EHE-fractie (%)"))
+        fig.add_trace(go.Scatter(x=years_plot, y=p_exceed_vals, mode="lines+markers",
+                                 name=f"Kans op overschrijding grens ({threshold_pct:.1f}%)",
+                                 yaxis="y2"))
+        fig.add_hline(y=reference_outcome.ehe_fraction_mean * 100, line_dash="dot",
+                     annotation_text="Referentieperiode (verwachtingswaarde)", line_color="grey")
+        fig.update_layout(
+            title="EHE-projectie t.o.v. referentieperiode (indicatief, ongekalibreerd)",
+            xaxis_title="Jaar (referentiepunt = midden van 1996-2025)",
+            yaxis=dict(title="Verwachte EHE-fractie (%)"),
+            yaxis2=dict(title="Overschrijdingskans (%)", overlaying="y", side="right"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            height=450,
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-    # --- Klimatos-stijl plots: trend, verdelingsverschuiving, return period ---
-    st.divider()
-    st.markdown("### Klimaatplots (analoog aan Klimatos.ClimateShift)")
-    st.plotly_chart(_build_trend_plot(year_mean_temp, trend, target_years),
-                    use_container_width=True)
+    st.markdown("### Terugkeertijd en verdelingsverschuiving")
+    st.plotly_chart(
+        _build_edition_return_time_plot(reference_outcome, year_outcomes, target_years),
+        use_container_width=True)
 
     plot_year = st.selectbox(
-        "Doeljaar voor de verdelings- en return-period-plot hieronder",
+        "Doeljaar voor de verdelingsplot hieronder",
         options=target_years, index=len(target_years) - 1,
     )
-    c_dist, c_rp = st.columns(2)
-    with c_dist:
-        st.plotly_chart(_build_distribution_plot(year_mean_temp, trend, plot_year),
-                        use_container_width=True)
-    with c_rp:
-        default_threshold = float(np.mean(list(year_mean_temp.values()))
-                                  + 2 * np.std(list(year_mean_temp.values()), ddof=1))
-        threshold_temp = st.number_input(
-            "Drempeltemperatuur voor de return-period-plot (\u00b0C, race-venster-gemiddelde)",
-            value=round(default_threshold, 1), step=0.5,
-        )
-        st.plotly_chart(
-            _build_return_period_plot(year_mean_temp, trend, plot_year, threshold_temp),
-            use_container_width=True)
-    st.caption(
-        "De GEV-fit (stippellijn) is bij n\u224830 referentiejaren instabiel in de staart -- "
-        "zelfde kanttekening als in de Klimatos-whitepaper. De Normaalfit (getrokken lijn) "
-        "is hier de robuustere van de twee."
-    )
+    st.plotly_chart(_build_distribution_plot(year_mean_temp, trend, plot_year),
+                    use_container_width=True)
 else:
     st.warning("Geen enkel doeljaar leverde geldige resultaten op.")
 
@@ -685,6 +751,11 @@ with st.expander("\u2139\ufe0f Belangrijke beperkingen -- lees dit voordat je di
         "bewolking zijn ongewijzigd gelaten op hun historische waarden voor die "
         "kalenderdag.\n"
         "- Trend-stationariteit binnen de referentieperiode is een aanname, niet getoetst.\n"
+        "- De EHE-resultaten worden hierboven als **kwalitatieve band** getoond, niet als "
+        "precieze verwachtingswaarde -- een tabel met exacte 'per 1000'-cijfers zou meer "
+        "precisie suggereren dan een ongekalibreerd, trend-geëxtrapoleerd getal waarmaakt. "
+        "De exacte cijfers staan in het uitklapbare paneel voor wie ze nodig heeft, met "
+        "hetzelfde voorbehoud.\n"
         "- Elke dag-realisatie draait een ensemble van "
         f"{n_simulations} deelnemers (i.p.v. de standaard {100}); de 210 dagen samen "
         "middelen ruis per losse dag grotendeels uit, maar dit blijft een indicatief "
